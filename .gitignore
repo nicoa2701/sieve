@@ -1,2 +1,4 @@
 roue12
 main12.o
+*.sw[a-p]
+.*.sw[a-p]
