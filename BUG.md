@@ -7,13 +7,17 @@ Toute reproduction chiffrée porte ses trois références : commit, date et
 heure, CPU. Le récit chronologique est dans `HISTORIQUE.md`, les campagnes de
 mesure dans `MESURES.md`.
 
-| | Défaut | État | Correctif |
-|---|---|---|---|
-| B1 | SIGFPE sur `HAUT = 0` | corrigé | `2124de7` |
-| B2 | `malloc(0)` traité comme un échec | corrigé | `2124de7` |
-| B3 | Messages de borne trompeurs | corrigé | `2124de7` |
-| B4 | Débordement de `bucket_entry_t.at` | corrigé | `bdce01b` |
-| B5 | Courses de données sur les drapeaux d'allocation | corrigé | `1a4180e` |
+| | Défaut | État | Correctif | Non-régression |
+|---|---|---|---|---|
+| B1 | SIGFPE sur `HAUT = 0` | corrigé | `2124de7` | `make check` |
+| B2 | `malloc(0)` traité comme un échec | corrigé | `2124de7` | `make check`, par interposition |
+| B3 | Messages de borne trompeurs | corrigé | `2124de7` | `make check` |
+| B4 | Débordement de `bucket_entry_t.at` | corrigé | `bdce01b` | `make check` |
+| B5 | Courses de données sur les drapeaux d'allocation | corrigé | `1a4180e` | **aucune** |
+
+`make check` a été validé par réinjection : chacun des quatre défauts remis
+dans le code fait échouer la suite, et B1 en fait tomber cinq contrôles à lui
+seul. B5 reste sans garde-fou, pour la raison exposée dans son entrée.
 
 ---
 

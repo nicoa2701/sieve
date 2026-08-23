@@ -9,6 +9,21 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-23 — `check.sh` · Cibles `make check` et `make sanitize`
+
+Le protocole de validation, jusque-là une suite de commandes tapées à la main,
+est figé dans `check.sh` : 121 contrôles en une dizaine de secondes — π(10ⁿ),
+cas limites, intervalles hauts, 60 intervalles aléatoires contre une référence
+indépendante, cohérence sous quatorze configurations d'étages, et une
+régression par bug corrigé sauf B5.
+
+`make sanitize` construit et exerce les deux variantes `SINK_TAIL` sous ASan
+et UBSan, avec `-fno-sanitize-recover=all` pour qu'une trouvaille fasse
+échouer la cible.
+
+La suite a été validée par réinjection : B1, B2, B3 et B4 remis dans le code
+la font échouer à chaque fois.
+
 ## 2026-08-23 — `1a4180e` · Accès atomiques aux drapeaux d'allocation
 
 B5 corrigé : les six accès à `alloc_failed` et `bucket_alloc_failed` situés

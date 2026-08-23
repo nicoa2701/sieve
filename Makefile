@@ -16,7 +16,7 @@ else
 SIMD_TIER := C portable, cible scalaire
 endif
 
-.PHONY: all clean run12 simd
+.PHONY: all clean run12 simd check sanitize
 
 all: roue12
 	@echo "Pre-crible : $(SIMD_TIER)   [$(CC) $(ARCH)]"
@@ -38,5 +38,21 @@ main12.o: main12.c
 run12: roue12
 	./roue12 $(LOW) $(LIMIT) $(ARGS)
 
+SAN := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all
+
+check: roue12
+	sh check.sh
+
+sanitize: main12.c
+	$(CC) $(SAN) $(OPENMP) -DSINK_TAIL=0 -o roue12-asan main12.c -lm
+	$(CC) $(SAN) $(OPENMP) -DSINK_TAIL=1 -o roue12-asan-sink main12.c -lm
+	@for b in roue12-asan roue12-asan-sink; do \
+	    for t in "0" "1e8" "1e12 -d 1e8"; do \
+	        printf '%-18s %-12s ' "$$b" "$$t"; \
+	        ./$$b $$t > /dev/null || exit 1; \
+	        echo ok; \
+	    done; \
+	done
+
 clean:
-	rm -f roue12 main12.o
+	rm -f roue12 main12.o roue12-asan roue12-asan-sink

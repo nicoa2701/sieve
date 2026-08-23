@@ -120,6 +120,10 @@ segments de portée. Accélération sur 8 threads : 3,9×, pour 4 cœurs physiqu
 
 Commit `9d2b576` · 2026-08-23 12:34:01–12:35:06 · i5-9300HF
 
+Depuis, ce protocole est figé dans `check.sh` : `make check` rejoue
+121 contrôles en une dizaine de secondes, `make sanitize` ajoute les passes
+ASan et UBSan sur les deux variantes `SINK_TAIL`.
+
 - π(10⁶) à π(10¹¹) exacts : 78 498 · 664 579 · 5 761 455 · 50 847 534 ·
   455 052 511 · 4 118 054 813.
 - 60 intervalles aléatoires dans [0, 2·10⁶], croisés contre un crible de
@@ -137,6 +141,5 @@ Commit `9d2b576` · 2026-08-23 12:34:01–12:35:06 · i5-9300HF
 
 Recensés dans `BUG.md`, qui fait foi. Les cinq sont corrigés.
 
-Hors défauts : il n'existe aucun test automatisé. Le protocole de validation
-ci-dessus n'est qu'une suite de commandes rejouées à la main, sans cible
-`make check`.
+Hors défauts : B5 n'a pas de test de non-régression, aucun outil n'atteignant
+proprement son chemin d'échec.
