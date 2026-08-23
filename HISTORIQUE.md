@@ -6,6 +6,57 @@ chaque campagne. Une entrée peut renvoyer à une campagne par son nom (`C1`…)
 
 ---
 
+## 2026-08-23 — `bdce01b` · Débordement du champ `at` des seaux
+
+`bucket_entry_t.at` range le décalage dans la fenêtre à partir du bit 9, les
+9 bits bas portant l'indice de marche `rc * 48 + j` (384 valeurs). Le décalage
+doit donc tenir sur 23 bits, soit une fenêtre de 8 MiB au plus. Rien ne le
+garantissait : `bucket_bytes` n'était plafonné qu'au segment, lui-même
+plafonné à `MAX_SEGMENT_KB` = 64 MiB.
+
+```c
++    if (bucket_bytes > BUCKET_WINDOW_MAX_BYTES)
++        bucket_bytes = BUCKET_WINDOW_MAX_BYTES;
+```
+
+Le plafond rejoint celui du segment, juste avant la réduction en puissance de
+deux, et porte un nom qui dit d'où vient la borne. Coût nul : une comparaison
+dans `main`, hors de toute boucle.
+
+Défaut trouvé en dérivant l'invariant pour le commenter, non par un test.
+Il n'était pas atteignable par défaut — la fenêtre est dérivée de la tranche
+L2, très loin de 8 MiB — mais un `-K` explicite suffisait à le déclencher.
+
+Intervalle `[9999999000000000, +10⁹]`, dont primesieve 12.10 donne 27 147 369.
+Avant, commit `4c643b7` · 2026-08-23 12:48 · i5-9300HF ; après, commit
+`bdce01b` · 2026-08-23 12:51:49 · i5-9300HF :
+
+| Réglage | Avant | Après |
+|---|---|---|
+| `-s 65536 -K 4096 -J 1` | 27 147 369 ✅ | — |
+| `-s 65536 -K 8192 -J 1` | 27 147 369 ✅ | 27 147 369 ✅ |
+| `-s 65536 -K 16384 -J 1` | 27 423 941 ❌ | 27 147 369 ✅ |
+| `-s 65536 -K 32768 -J 1` | 27 396 895 ❌ | — |
+| `-s 65536 -K 65536 -J 1` | 27 309 075 ❌ | 27 147 369 ✅ |
+
+Le seuil tombait exactement sur 2²³ octets, comme l'empaquetage le prédit.
+
+## 2026-08-23 — `4c643b7` · Commentaires minimaux
+
+Vingt-cinq blocs dans `main12.c`, aux seuls endroits où le code ne peut pas se
+dire lui-même : les dérivations (masques de roue, décalages de tour, marche de
+la roue 210, décalages recalculés, amortissement du segment) et les invariants
+de sûreté (copie de queue du pré-crible, empaquetage de `at`, blocs de seau
+auto-localisés, marge exigée par `sweep_over`, octet de garde de
+`mark_partial`). Section `.text` compilée sans `-g` identique à celle de
+`9d2b576`.
+
+## 2026-08-23 — `b750dfa` · Fichier d'échange retiré du suivi
+
+Un `git add -A` avait ramassé un `.MESURES.md.swp`. Retiré du suivi, motifs
+d'échange vim ajoutés au `.gitignore`. Le blob reste dans l'historique de
+`73c6c1c`.
+
 ## 2026-08-23 — `9d2b576` · En-tête minimal
 
 En-tête de `main12.c` listant les cinq points clés : roue mod 30 et conversion
