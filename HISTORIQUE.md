@@ -9,6 +9,24 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-23 — Campagne C2, refroidissement entre passages
+
+`MESURES.md` réécrit : C2 remplace C1. Seul changement de méthode, un
+refroidissement de 10 × la durée de la mesure borné à [3 s, 30 s] entre
+chaque passage. Il déplace les chiffres de 20 % — C1 mesurait une machine
+froide au premier point de chaque série, et sous-estimait les deux programmes,
+roue12 plus que primesieve.
+
+Les conclusions de C1 tiennent : croisement entre 10¹² et 10¹³, retard de
+×1,5 à 10¹⁵, empreinte mémoire comparable.
+
+L'ablation des étages passe de 10⁹ à 10¹⁰, où la bande de reproductibilité
+tombe de ±8 % à ±1,5 %, et du `/usr/bin/time` au chronomètre interne, dont la
+résolution est de 0,1 ms au lieu de 10 ms. Une lecture intermédiaire de C2
+faisait apparaître la plaque et les seaux comme coûteux à 10⁹ ; c'était du
+bruit. À ces bornes la plaque s'éteint d'elle-même et aucun premier n'atteint
+les seaux : couper l'un ou l'autre est une non-opération.
+
 ## 2026-08-23 — `check.sh` · Cibles `make check` et `make sanitize`
 
 Le protocole de validation, jusque-là une suite de commandes tapées à la main,

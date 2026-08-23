@@ -2,8 +2,7 @@
 
 Ce fichier est réécrit à chaque campagne : il décrit l'état mesuré le plus
 récent, pas l'évolution dans le temps. L'évolution est dans `HISTORIQUE.md`.
-
-Les défauts sont dans `BUG.md`, le récit chronologique dans `HISTORIQUE.md`.
+Les défauts sont dans `BUG.md`.
 
 **Règle** — aucun chiffre sans ses trois références : le commit mesuré (source
 exacte), la date et l'heure, le CPU. Chaque section ci-dessous les porte, pour
@@ -11,25 +10,18 @@ rester lisible isolément.
 
 ---
 
-## Campagne C1 — 2026-08-23
+## Campagne C2 — 2026-08-23
+
+Remplace C1, dont la méthode ne refroidissait pas entre les passages et
+mesurait donc une machine froide au premier point de chaque série.
 
 ### Provenance
 
 | | |
 |---|---|
-| **Commit** | `9d2b5764ef51f62273ef03932f95e7a29027d1c7` |
-| **Date** | 2026-08-23, 12:31:41 → 12:35:06 (UTC+02:00) |
+| **Commit** | `491cd40a010b37be2924b9809e7994d1352bea3b` |
+| **Date** | 2026-08-23, 13:22:48 → 14:06:43 (UTC+02:00) |
 | **CPU** | Intel Core i5-9300HF @ 2,40 GHz — 4 cœurs / 8 threads |
-
-Arbre propre au moment du build (`git status` vide), binaire reconstruit par
-`make clean && make` à 12:31:41 depuis ce commit exact.
-
-**Le code a évolué depuis.** Les commits postérieurs n'ont touché au chemin
-chaud d'aucune manière : commentaires, puis une comparaison ajoutée dans
-`main`, hors de toute boucle. Contrôle daté — commit `bdce01b` ·
-2026-08-23 12:51:14 · i5-9300HF : 10⁹ en 21,9 ms (C1 : 22,8), 10¹⁰ en 0,28 s
-(C1 : 0,26), [10¹², +10¹⁰] en 0,59 s (C1 : 0,84). Les chiffres de C1 tiennent,
-dans la dispersion annoncée.
 
 ### Plateforme
 
@@ -44,98 +36,109 @@ dans la dispersion annoncée.
 | Build | `make` → `-O3 -g -Wall -Wextra -march=native -fopenmp -DSINK_TAIL=0` |
 | Référence | primesieve 12.10 |
 
-Paramètres retenus automatiquement à 10¹² (`-v`) : segment 1024 KiB, bloc L1
-16 KiB, tranche L2 32 KiB, plaque 128 KiB, fenêtre de seau 32 KiB sur
-64 anneaux, pré-crible 27 premiers en 12 tables / 3 passes, 67 KiB.
-
 ### Méthode
 
-Trois exécutions par point, **meilleur temps retenu**. `primesieve` est appelé
-avec `-q` : son affichage de progression fausse la mesure. Machine sous WSL2,
-sans gouverneur de fréquence fixé — la dispersion résiduelle reste de l'ordre
-de 10 %, donc un écart inférieur à ~15 % n'est pas concluant.
+**Refroidissement entre chaque passage : 10 × la durée de la mesure, borné à
+[3 s, 30 s].** C'est le seul changement de méthode entre C1 et C2, et il
+suffit à déplacer les chiffres de 20 %.
+
+Meilleur temps retenu, sur 3 passages pour la comparaison et 5 pour
+l'ablation. `primesieve` est appelé avec `-q` : son affichage de progression
+fausse la mesure. Machine sous WSL2, sans gouverneur de fréquence fixé.
+
+**Résolution.** Deux mesures indépendantes du même point donnent une bande de
+reproductibilité de ±1,5 % à 10¹⁰ au chronomètre interne (249,3 puis 252,7 ms
+pour le défaut). Rien en dessous de ~3 % n'est interprétable. L'ablation est
+faite à 10¹⁰ et non à 10⁹ : à 10⁹ la bande atteint ±8 %, ce qui noie tous les
+étages sauf les plus gros. `/usr/bin/time` plafonne à 10 ms, soit 4 % à cette
+borne, d'où le recours au chronomètre interne du programme.
 
 ### Comparaison à primesieve 12.10, 8 threads
 
-Commit `9d2b576` · 2026-08-23 12:31:54–12:33:11 · i5-9300HF
+Commit `491cd40` · 2026-08-23 13:22:48–13:35:55 · i5-9300HF
 
 Comptage complet :
 
 | Borne | roue12 | primesieve | rapport |
 |---|---|---|---|
-| π(10¹⁰) | **0,26 s** | 0,35 s | 1,35× |
-| π(10¹¹) | **4,27 s** | 4,97 s | 1,16× |
+| π(10¹⁰) | **0,25 s** | 0,32 s | 1,28× |
+| π(10¹¹) | **3,31 s** | 4,26 s | 1,29× |
 
 Intervalle de largeur 10¹⁰ :
 
 | Début | roue12 | primesieve | rapport |
 |---|---|---|---|
-| 10¹² | **0,84 s** | 1,01 s | 1,20× |
-| 10¹³ | 1,26 s | 1,20 s | 0,95× |
-| 10¹⁴ | 1,65 s | 1,33 s | 0,81× |
-| 10¹⁵ | 2,44 s | 1,61 s | 0,66× |
+| 10¹² | **0,49 s** | 0,54 s | 1,10× |
+| 10¹³ | 0,72 s | 0,65 s | 0,90× |
+| 10¹⁴ | 1,02 s | 0,84 s | 0,82× |
+| 10¹⁵ | 1,66 s | 1,10 s | 0,66× |
 
 **Point de croisement entre 10¹² et 10¹³.** En deçà, roue12 devance la
-référence de 15 à 35 %. Au-delà, quand la quasi-totalité des premiers passe
+référence de 10 à 30 %. Au-delà, quand la quasi-totalité des premiers passe
 par les seaux, il perd jusqu'à 1,5×. C'est le seul régime où le programme est
 distancé, et donc la seule marge de progrès identifiée.
 
 ### Empreinte mémoire
 
-Commit `9d2b576` · 2026-08-23 12:33:27–12:33:33 · i5-9300HF
+Commit `491cd40` · 2026-08-23 13:33 · i5-9300HF
 
 | Intervalle | roue12 | primesieve |
 |---|---|---|
-| [10¹⁵, +10¹⁰] | 158 404 KiB | 139 648 KiB |
+| [10¹⁵, +10¹⁰] | 158 404 KiB | 139 392 KiB |
 
 L'empreinte n'explique donc pas le retard à 10¹⁵ : elle est du même ordre. Le
 coût est par entrée de seau, pas en volume.
 
 ### Coût des étages
 
-Commit `9d2b576` · 2026-08-23 12:33:46–12:33:49 · i5-9300HF
+Commit `491cd40` · 2026-08-23 14:01:55–14:05:15 · i5-9300HF
 
-Comptage de 10⁹, 8 threads, chronomètre interne du programme, meilleur de
-cinq. Chaque étage désactivé isolément ; toutes les variantes donnent le bon
-résultat.
+Comptage de 10¹⁰, 8 threads, chronomètre interne, meilleur de 5, chaque étage
+désactivé isolément. Toutes les variantes donnent le bon résultat.
 
 | Configuration | Temps | Écart |
 |---|---|---|
-| défaut | 22,8 ms | — |
-| `-S 0` (plaque coupée) | 23,2 ms | +2 % |
-| `-Q 0` (préchargement neutralisé) | 23,3 ms | +2 % |
-| `-B 0` (tranche L2 coupée) | 24,0 ms | +5 % |
-| `-K 0` (seaux coupés) | 24,2 ms | +6 % |
-| `-c 1` | 24,8 ms | +9 % |
-| `-b 0` (bloc L1 coupé) | 28,8 ms | +26 % |
-| `-s 32` | 30,8 ms | +35 % |
-| `-p 0` (pré-crible coupé) | 36,4 ms | +60 % |
-| `-t 1` | 88,8 ms | ×3,9 |
+| **défaut** | **249,3 ms** | — |
+| `-S 0` (plaque coupée) | 248,0 ms | *non résolu* |
+| `-K 0` (seaux coupés) | 248,4 ms | *non résolu* |
+| `-Q 0` (préchargement neutralisé) | 249,1 ms | *non résolu* |
+| `-B 0` (tranche L2 coupée) | 258,5 ms | +3,7 % |
+| `-c 1` | 259,7 ms | +4,2 % |
+| `-b 0` (bloc L1 coupé) | 308,3 ms | +24 % |
+| `-p 0` (pré-crible coupé) | 367,6 ms | +47 % |
+| `-s 32` | 397,1 ms | +59 % |
 
-À cette borne le pré-crible est de loin le poste le plus rentable, et les
-seaux ne rapportent que 6 % — attendu : ils ne payent qu'au-delà de quelques
-segments de portée. Accélération sur 8 threads : 3,9×, pour 4 cœurs physiques.
+Contrôles de reproductibilité dans la même série : défaut à 252,7 ms au second
+passage, `-S 0` à 250,9 ms.
+
+**Les trois lignes « non résolu » ne sont pas des coûts nuls, ce sont des
+non-opérations.** `-v` le confirme à cette borne : la plaque s'éteint
+d'elle-même (`sqrt(N) <= plaque : elle vide la bande directe`) et le seuil des
+seaux vaut 737 280, très au-dessus de √10¹⁰ = 100 000, donc aucun premier n'y
+entre. Couper ce qui ne tourne pas ne change rien — c'est le comportement
+attendu, pas une contre-performance de ces deux étages.
+
+À cette borne le pré-crible et le dimensionnement du segment dominent.
+Accélération sur 8 threads, mesurée à 10⁹ : 3,8× pour 4 cœurs physiques.
+
+**Non mesuré** : le coût réel de la plaque et des seaux, qui demande une borne
+où ils travaillent, au-delà de 10¹³. C'est le trou principal de cette
+campagne, et il porte précisément sur le régime où le programme est distancé.
 
 ### Validation
 
-Commit `9d2b576` · 2026-08-23 12:34:01–12:35:06 · i5-9300HF
+Commit `491cd40` · 2026-08-23 14:05:59–14:06:43 · i5-9300HF
 
-Depuis, ce protocole est figé dans `check.sh` : `make check` rejoue
-121 contrôles en une dizaine de secondes, `make sanitize` ajoute les passes
-ASan et UBSan sur les deux variantes `SINK_TAIL`.
+Le protocole est figé dans `check.sh` et rejouable :
 
-- π(10⁶) à π(10¹¹) exacts : 78 498 · 664 579 · 5 761 455 · 50 847 534 ·
-  455 052 511 · 4 118 054 813.
-- 60 intervalles aléatoires dans [0, 2·10⁶], croisés contre un crible de
-  référence indépendant : **0 écart**. Rejoués sous `-t 1`, `-s 32 -c 1`,
-  `-p 0`, `-K 32` et `-b 0 -B 0 -S 0` : **0 écart** dans les six
-  configurations.
-- Cas limites, tous corrects : `0`→0, `1`→0, `2`→1, `30`→10, `[1,1]`→0,
-  `[5,11]`→3, `[0,100]`→25, `[10¹⁶−1, 10¹⁶]`→0.
-- ASan + UBSan : 0 erreur sur `0`, 10⁸ et `[10¹², +10⁸]`, dans les deux
-  variantes `SINK_TAIL=0` et `SINK_TAIL=1`.
-- Compilation `-Wall -Wextra` sans un seul avertissement, y compris la
-  variante `-DRECOMPUTE_TURN=1`, qui donne le même résultat à 10⁹.
+- `make check` — 121 contrôles, 0 échec, 9 s. π(10ⁿ), cas limites, intervalles
+  hauts, 60 intervalles aléatoires contre une référence indépendante,
+  cohérence sous quatorze configurations d'étages, une régression par bug
+  corrigé sauf B5.
+- `make sanitize` — 6 passes ASan + UBSan sans trouvaille, 37 s, sur les deux
+  variantes `SINK_TAIL`.
+- Compilation `-Wall -Wextra` sans un seul avertissement, y compris sans
+  `-fopenmp` et avec `-DRECOMPUTE_TURN=1`.
 
 ### Défauts connus
 
