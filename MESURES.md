@@ -130,6 +130,31 @@ Commit `9d2b576` · 2026-08-23 12:34:01–12:35:06 · i5-9300HF
    est écrit par plusieurs threads sans `atomic` ; `alloc_failed` est écrit en
    `atomic write` mais lu sans. Bénin en pratique — même valeur, un `int` —
    mais formellement indéfini.
-2. **Aucun test automatisé.** Le protocole de validation ci-dessus n'existe
+2. **Débordement du champ `at` des seaux au-delà d'une fenêtre de 8 MiB.**
+   `bucket_entry_t.at` empaquette le décalage dans la fenêtre à partir du
+   bit 9, sur un `uint32_t` : le décalage doit donc rester sous 2²³ octets.
+   Rien ne le garantit — `bucket_bytes` est seulement plafonné au segment,
+   lui-même plafonné à `MAX_SEGMENT_KB` = 64 MiB. Au-delà de `-K 8192` le
+   compte devient faux.
+
+   Reproduction — commit `4c643b7` · 2026-08-23 12:48:17–12:48:41 · i5-9300HF.
+   Intervalle `[9999999000000000, +10⁹]`, dont primesieve 12.10 donne
+   27 147 369 :
+
+   | Réglage | Compte |
+   |---|---|
+   | défaut | 27 147 369 ✅ |
+   | `-s 65536 -K 4096 -J 1` | 27 147 369 ✅ |
+   | `-s 65536 -K 8192 -J 1` | 27 147 369 ✅ |
+   | `-s 65536 -K 16384 -J 1` | 27 423 941 ❌ |
+   | `-s 65536 -K 32768 -J 1` | 27 396 895 ❌ |
+   | `-s 65536 -K 65536 -J 1` | 27 309 075 ❌ |
+
+   Le seuil tombe exactement sur 2²³ octets, comme prévu par l'empaquetage.
+   Non atteignable par défaut : la fenêtre est dérivée de la tranche L2, très
+   loin de 8 MiB. Il faut un `-K` explicite, un segment large, et une borne
+   assez haute pour que des premiers atteignent la bande des seaux.
+
+3. **Aucun test automatisé.** Le protocole de validation ci-dessus n'existe
    que sous forme de commandes rejouées à la main ; il n'y a pas de cible
    `make check`.
