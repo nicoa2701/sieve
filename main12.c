@@ -611,7 +611,7 @@ typedef struct
 /*
  * Une entree de seau : k vaut p / 30, et at empaquette le decalage en octets
  * dans la fenetre (a partir du bit 9) avec l'indice de marche rc * 48 + j,
- * qui tient sur 9 bits. Le decalage doit donc rester sous 2^23 octets.
+ * qui tient sur 9 bits. D'ou BUCKET_WINDOW_MAX_BYTES, qui borne la fenetre.
  */
 typedef struct
 {
@@ -622,6 +622,10 @@ typedef struct
 #ifndef BUCKET_BLOCK_BYTES
 #define BUCKET_BLOCK_BYTES 16384
 #endif
+
+/* Plafond de la fenetre de seau : bucket_entry_t.at range le decalage a
+   partir du bit 9, donc il doit tenir sur les 23 bits restants. */
+#define BUCKET_WINDOW_MAX_BYTES (1ULL << 23)
 
 typedef struct bucket_block
 {
@@ -3090,6 +3094,9 @@ int main(int argc, char **argv)
 
     if (bucket_bytes > segment_bytes)
         bucket_bytes = segment_bytes;
+
+    if (bucket_bytes > BUCKET_WINDOW_MAX_BYTES)
+        bucket_bytes = BUCKET_WINDOW_MAX_BYTES;
 
     if (bucket_bytes)
     {
