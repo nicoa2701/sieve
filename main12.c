@@ -3302,7 +3302,12 @@ int main(int argc, char **argv)
             ring.cur = calloc((size_t)ring_slots, sizeof *ring.cur);
 
             if (!ring.cur)
+            {
+#ifdef _OPENMP
+#               pragma omp atomic write
+#endif
                 bucket_alloc_failed = 1;
+            }
         }
 
         int bucket_failed = 0;
@@ -3320,7 +3325,14 @@ int main(int argc, char **argv)
 #endif
         for (int64_t c = 0; c < (int64_t)chunk_count; c++)
         {
-            if (alloc_failed)
+            int stop;
+
+#ifdef _OPENMP
+#           pragma omp atomic read
+#endif
+            stop = alloc_failed;
+
+            if (stop)
                 continue;
 
             uint64_t chunk_first =
@@ -3429,7 +3441,12 @@ int main(int argc, char **argv)
                 );
 
                 if (bucket_failed)
+                {
+#ifdef _OPENMP
+#                   pragma omp atomic write
+#endif
                     bucket_alloc_failed = 1;
+                }
 
                 if (segment_first == sieve_first)
                 {
