@@ -9,6 +9,14 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-23 — `1a4180e` · Accès atomiques aux drapeaux d'allocation
+
+B5 corrigé : les six accès à `alloc_failed` et `bucket_alloc_failed` situés
+dans la région `omp parallel` passent par `atomic read` ou `atomic write`.
+Sans coût mesurable — le seul ajout au chemin chaud est une lecture atomique
+par chunk. Vérifié par inspection et non-régression, pas par ThreadSanitizer :
+voir la limite exposée dans `BUG.md`.
+
 ## 2026-08-23 — `BUG.md`
 
 Recensement des cinq défauts trouvés depuis l'ouverture du suivi : B1 SIGFPE

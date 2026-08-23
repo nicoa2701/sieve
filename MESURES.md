@@ -135,8 +135,7 @@ Commit `9d2b576` · 2026-08-23 12:34:01–12:35:06 · i5-9300HF
 
 ### Défauts connus
 
-Recensés dans `BUG.md`, qui fait foi. À la date de cette campagne, un seul
-reste ouvert : B5, les courses de données sur les drapeaux d'allocation.
+Recensés dans `BUG.md`, qui fait foi. Les cinq sont corrigés.
 
 Hors défauts : il n'existe aucun test automatisé. Le protocole de validation
 ci-dessus n'est qu'une suite de commandes rejouées à la main, sans cible

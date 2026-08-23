@@ -13,7 +13,7 @@ mesure dans `MESURES.md`.
 | B2 | `malloc(0)` traité comme un échec | corrigé | `2124de7` |
 | B3 | Messages de borne trompeurs | corrigé | `2124de7` |
 | B4 | Débordement de `bucket_entry_t.at` | corrigé | `bdce01b` |
-| B5 | Courses de données sur les drapeaux d'allocation | **ouvert** | — |
+| B5 | Courses de données sur les drapeaux d'allocation | corrigé | `1a4180e` |
 
 ---
 
@@ -199,43 +199,70 @@ Le seuil tombait exactement sur 2²³ octets, comme l'empaquetage le prédit.
 
 ## B5 — Courses de données sur les drapeaux d'allocation
 
-**État** : **ouvert**
+**État** : corrigé · commit `1a4180e` · 2026-08-23
 
 **Symptôme.** Aucun observé. Formellement, comportement indéfini au sens du
 modèle mémoire C.
 
 **Cause.** Deux drapeaux partagés dans la région `omp parallel` :
 
-- `bucket_alloc_failed` (`main12.c:3127`) est écrit sans `atomic` par
-  plusieurs threads, en `main12.c:3305` et `main12.c:3432`.
-- `alloc_failed` (`main12.c:3278`) est écrit sous `#pragma omp atomic write`
-  en `main12.c:3315`, mais relu sans `atomic` en `main12.c:3323`.
+- `bucket_alloc_failed` était écrit sans `atomic` par plusieurs threads, à
+  l'échec d'allocation de `ring.cur` et à l'échec d'un seau.
+- `alloc_failed` était écrit sous `#pragma omp atomic write`, mais relu sans
+  `atomic` au début de chaque tour de la boucle sur les chunks.
 
-**Pourquoi c'est bénin en pratique.** Les deux sont des `int`, tous les
+**Pourquoi c'était bénin en pratique.** Les deux sont des `int`, tous les
 écrivains écrivent la même valeur `1`, et une lecture manquée ne fait que
 retarder l'abandon d'un tour de boucle. Sur les architectures visées, un
 `int` aligné ne se déchire pas.
 
-**Pourquoi le corriger quand même.** Rien dans le standard ne garantit ce
-qui précède, et un compilateur est libre de garder `alloc_failed` en registre
-à travers la boucle, la rendant insensible à l'écriture d'un autre thread.
+**Pourquoi le corriger quand même.** Rien dans le standard ne garantit ce qui
+précède, et un compilateur reste libre de garder `alloc_failed` en registre à
+travers la boucle, la rendant insensible à l'écriture d'un autre thread.
 
-**Correctif proposé** — symétriser, coût nul hors du chemin chaud :
-
-```c
-#pragma omp atomic write
-bucket_alloc_failed = 1;
-```
-
-aux deux sites d'écriture, et une lecture atomique du drapeau avant le
-`continue` :
+**Correctif.** Les six accès situés dans la région parallèle passent tous par
+`atomic read` ou `atomic write`. Aux deux sites d'écriture :
 
 ```c
-int stop;
-#pragma omp atomic read
-stop = alloc_failed;
-if (stop)
-    continue;
+     if (!ring.cur)
++    {
++#ifdef _OPENMP
++#       pragma omp atomic write
++#endif
+         bucket_alloc_failed = 1;
++    }
 ```
 
-Non appliqué : non demandé.
+et à la lecture, en tête de la boucle sur les chunks :
+
+```c
+-    if (alloc_failed)
+-        continue;
++    int stop;
++
++#ifdef _OPENMP
++#   pragma omp atomic read
++#endif
++    stop = alloc_failed;
++
++    if (stop)
++        continue;
+```
+
+Les deux lectures qui suivent la région parallèle restent des lectures
+simples : la barrière implicite de fin de région les ordonne déjà.
+
+**Coût.** L'unique ajout au chemin chaud est une lecture atomique par chunk,
+soit quelques dizaines par exécution. Mesuré à 10⁹, meilleur de neuf, commit
+`1a4180e` · 2026-08-23 12:59 · i5-9300HF : 23,4 ms après contre 23,6 ms avant.
+Les écritures atomiques ne sont atteintes qu'en cas d'échec d'allocation.
+
+**Limite de la vérification.** Le correctif est vérifié par inspection — les
+six accès sont atomiques, `grep` à l'appui — par compilation avec et sans
+`-fopenmp`, et par la non-régression fonctionnelle complète. **Il ne l'est pas
+par un détecteur de courses.** ThreadSanitizer ne signale rien ni avant ni
+après, parce que les écritures concurrentes n'ont lieu qu'à un échec
+d'allocation : en marche normale, le chemin n'est jamais pris. Forcer cet
+échec demande d'interposer `calloc`, ce qui casse soit libgomp, soit
+ThreadSanitizer lui-même, incompatible avec `LD_PRELOAD`. La course reste donc
+établie par lecture du code, pas par observation.
