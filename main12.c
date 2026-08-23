@@ -172,6 +172,10 @@ static uint32_t *generate_base_primes(uint64_t limit,
 }
 
 
+/*
+ * wheel_mask[rc][j] efface le bit du residu (residues[rc] * residues[j]) % 30 :
+ * la classe du multiple p * (30q + residues[j]) quand p % 30 == residues[rc].
+ */
 static const uint8_t wheel_mask[8][8] =
 {
     { 0xFE, 0xFD, 0xFB, 0xF7, 0xEF, 0xDF, 0xBF, 0x7F },
@@ -193,6 +197,12 @@ static const int8_t residue_to_index[30] =
 
 #define TURN_SLOTS 8
 
+/*
+ * Un tour vaut 30p entiers, soit p octets, et porte 8 multiples de p.
+ * out[k] est le decalage en octets du multiple p * (30q + residues[k]) depuis
+ * le debut du tour, le curseur portant deja le terme p / 30 (activate_prime).
+ * out[0] vaut donc 0, ce dont les boucles deroulees se servent.
+ */
 static void
 build_turn_offsets(const uint32_t *primes,
                    size_t count,
@@ -258,6 +268,11 @@ static uint64_t g_pre_footprint;
 
 static uint8_t  g_pre_ones[128];
 
+/*
+ * Repartition en serpentin : les premiers etant croissants, alterner le sens
+ * a chaque tour apparie un petit premier avec un grand, ce qui egalise les
+ * produits — donc les periodes des tables — d'un groupe a l'autre.
+ */
 static void presieve_partition(int ngroups, int *assign)
 {
     int base  = g_pre_count / ngroups;
@@ -286,6 +301,10 @@ static void presieve_partition(int ngroups, int *assign)
     }
 }
 
+/*
+ * La periode d'un groupe, en octets, est le produit de ses premiers : le motif
+ * se repete tous les 30 * produit entiers, et un octet porte 30 entiers.
+ */
 static double presieve_estimate(int ngroups, int *assign)
 {
     presieve_partition(ngroups, assign);
@@ -361,6 +380,8 @@ static void presieve_mark(uint8_t *table,
     }
 }
 
+/* Construit une table par groupe et les complete jusqu'a PRESIEVE_PASS_TABLES
+   pres, les tables de bourrage etant neutres pour le ET. */
 static int presieve_build(uint32_t pmax, double *want)
 {
     g_pre_count    = 0;
@@ -415,6 +436,7 @@ static int presieve_build(uint32_t pmax, double *want)
     {
         uint64_t span = period[g];
 
+        /* Un multiple entier de la periode, porte a 64 octets au moins. */
         if (span < 64)
             span *= (64 + span - 1) / span;
 
@@ -432,6 +454,8 @@ static int presieve_build(uint32_t pmax, double *want)
                 presieve_mark(table, span, g_pre_primes[i]);
         }
 
+        /* Copie de queue : presieve_fill lit 64 octets depuis n'importe quel
+           decalage de [0, span). */
         memcpy(table + span, table, 64);
 
         g_pre[g].data   = table;
@@ -479,6 +503,10 @@ static void presieve_free(void)
 #define PRESIEVE_PATH_LABEL "(C portable, cible scalaire)"
 #endif
 
+/*
+ * Combine les tables par ET, quatre par passe : la premiere passe ecrit, les
+ * suivantes accumulent. Chaque table avance a son propre pas modulo sa periode.
+ */
 static void presieve_fill(uint8_t *dst,
                           uint64_t bytes,
                           uint64_t first_byte)
@@ -580,6 +608,11 @@ typedef struct
 } wheel_cursor_t;
 
 
+/*
+ * Une entree de seau : k vaut p / 30, et at empaquette le decalage en octets
+ * dans la fenetre (a partir du bit 9) avec l'indice de marche rc * 48 + j,
+ * qui tient sur 9 bits. Le decalage doit donc rester sous 2^23 octets.
+ */
 typedef struct
 {
     uint32_t k;
@@ -597,6 +630,8 @@ typedef struct bucket_block
     bucket_entry_t       e[(BUCKET_BLOCK_BYTES - 16) / 8];
 } bucket_block_t;
 
+/* Les blocs sont alignes sur leur propre taille : masquer un pointeur d'entree
+   retrouve son bloc. Le -1 traite le pointeur juste apres la derniere entree. */
 #define BUCKET_BLOCK_OF(p)                                            \
     ((bucket_block_t *)(((uintptr_t)(p) - 1)                          \
                         & ~(uintptr_t)(BUCKET_BLOCK_BYTES - 1)))
@@ -624,6 +659,8 @@ static const uint8_t residues210[48] =
     179, 181, 187, 191, 193, 197, 199, 209
 };
 
+/* Decalages de tour recalculables sans table : pour p = 30k + sr,
+   o[t] = k * (residues[t] - 1) + sr * residues[t] / 30. */
 static uint8_t off30_lo[8][8];
 static uint8_t r30m1[8];
 
@@ -642,6 +679,13 @@ static uint8_t next210[211];
 
 static uint8_t next30[31];
 
+/*
+ * Marche de la roue 210, pour les seaux. Pour p = 30k + sr et un multiple
+ * m = 210q + Rj, l'octet vise vaut 210kq + 7*sr*q + k*Rj + Tj, ou Tj vaut
+ * sr * Rj / 30. Passer au residu suivant ajoute donc k * dR + dT.
+ * next30[r] et next210[r] donnent l'indice du premier residu >= r, pour
+ * arrondir un cofacteur sur la roue.
+ */
 static void build_wheel210(void)
 {
     {
@@ -766,6 +810,9 @@ static int bucket_open(bucket_ring_t *r, bucket_entry_t **slot)
     return 1;
 }
 
+/* Le tableau d'entrees remplit exactement le bloc : le pointeur atteint la
+   frontiere suivante quand le bloc est plein, et vaut NULL quand il n'y a pas
+   encore de bloc — un seul test couvre les deux cas. */
 static inline int bucket_push(bucket_ring_t *r,
                               uint64_t d,
                               uint32_t k,
@@ -800,6 +847,11 @@ static void bucket_ring_free(bucket_ring_t *r)
 
 static int g_prefetch = PREFETCH_DEFAUT;
 
+/*
+ * Vide les seaux fenetre par fenetre. Chaque entree reprend ou elle s'etait
+ * arretee, marque tant qu'elle reste dans la fenetre, puis est reclassee dans
+ * celle ou elle retombe. L'anneau tourne d'un cran par fenetre.
+ */
 __attribute__((noinline))
 static int sweep_bucketed(uint8_t *bits,
                           uint64_t segment_bytes,
@@ -903,6 +955,10 @@ static int sweep_bucketed(uint8_t *bits,
     return 1;
 }
 
+/*
+ * Place le curseur sur le premier multiple de p qui soit a la fois >= low et
+ * >= p * p, son cofacteur arrondi au residu suivant de la roue.
+ */
 static void
 activate_prime(uint32_t p,
                uint64_t segment_first_index,
@@ -931,6 +987,10 @@ activate_prime(uint32_t p,
 }
 
 #if SINK_TAIL
+/*
+ * Queue du tour, sans branchement : les voies qui sortent du segment ecrivent
+ * dans un octet perdu au-dela du bitset, dans les 64 octets de garde alloues.
+ */
 __attribute__((always_inline))
 static inline unsigned
 mark_partial(uint8_t *bits,
@@ -962,6 +1022,11 @@ mark_partial(uint8_t *bits,
 }
 #endif
 
+/*
+ * Balaie jusqu'a `to` sans jamais depasser : la boucle deroulee s'arrete des
+ * que le tour entier ne tient plus, la queue est traitee voie par voie.
+ * `sub` ramene le curseur a l'origine du segment suivant.
+ */
 __attribute__((always_inline))
 static inline void
 sweep_exact(uint8_t *bits,
@@ -1046,6 +1111,8 @@ done:
     c->j    = j;
 }
 
+/* Meme balayage, decalages recalcules : au-dela de class_mid3 les premiers
+   n'ont pas d'entree dans la table des tours. */
 __attribute__((always_inline))
 static inline void
 sweep_exact_calc(uint8_t *bits,
@@ -1126,6 +1193,11 @@ done:
     c->j    = j;
 }
 
+/*
+ * Variante rapide : elle ecrit un tour entier des que base < to, donc jusqu'a
+ * p * 29 / 30 octets au-dela. L'appelant ne l'emploie que s'il reste cette
+ * marge, celle que les overshoot mesurent.
+ */
 __attribute__((always_inline))
 static inline void
 sweep_over(uint8_t *bits,
@@ -1611,6 +1683,11 @@ static void sweep_slabbed(uint8_t *bits,
     }
 }
 
+/*
+ * Un segment. Les premiers sont ranges par classe de residu puis par taille ;
+ * class_mid a class_mid4 decoupent chaque classe en cinq bandes, une par
+ * etage, chacune balayee a l'echelle de son etage.
+ */
 static void
 sieve_segment(uint8_t *bits,
               uint64_t segment_first_index,
@@ -1687,6 +1764,8 @@ sieve_segment(uint8_t *bits,
         {
             size_t from = was[rc] > class_mid4[rc] ? was[rc] : class_mid4[rc];
 
+            /* Les premiers au-dela de class_mid4 entrent dans les seaux des
+               leur activation, positionnes sur la roue 210. */
             for (size_t a = from; a < active[rc]; a++)
             {
                 uint32_t p = sorted[a];
@@ -2090,6 +2169,11 @@ static uint64_t default_slab_bytes(int threads)
     return 0;
 }
 
+/*
+ * Taille de segment telle qu'un premier de [lo, hi) fasse en moyenne
+ * SEGMENT_MARKS_PER_ENTRY marques par segment : il y fait 8s / p marques pour
+ * une seule entree de curseur.
+ */
 static uint64_t amortized_segment_bytes(const uint32_t *primes,
                                         size_t lo,
                                         size_t hi)
@@ -2793,6 +2877,7 @@ int main(int argc, char **argv)
 
     uint32_t p_chunk = chunk_bytes ? primes[chunk_end - 1] : 0;
 
+    /* Marge d'un tour complet, celle qu'exige sweep_over. */
     uint64_t overshoot2 =
         chunk_bytes ? (uint64_t)p_chunk * 29 / 30 + 1 : 0;
 
@@ -3129,6 +3214,8 @@ int main(int argc, char **argv)
     uint64_t first_candidate =
         low_limit > 1 ? wheel_count(low_limit - 1) : 0;
 
+    /* Le crible demarre sur une frontiere d'octet ; les bits candidats situes
+       sous low_limit sont effaces apres coup. */
     uint64_t sieve_first = first_candidate & ~(uint64_t)7;
 
     uint64_t skip_bits = first_candidate - sieve_first;
@@ -3164,6 +3251,9 @@ int main(int argc, char **argv)
 
     if (bucket_bytes)
     {
+        /* L'anneau doit couvrir le plus grand saut d'un premier entre deux
+           marques : l'ecart maximal des residus de la roue 210 vaut 10, soit
+           p / 3 octets, que 2p majore largement. */
         uint64_t need =
             2 * (uint64_t)primes[prime_count - 1] / bucket_bytes + 4;
 
