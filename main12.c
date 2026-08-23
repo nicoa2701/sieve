@@ -1,3 +1,18 @@
+/*
+ * Crible de premiers segmente, roue mod 30, OpenMP.
+ *
+ * 1) Un octet porte les 8 residus premiers a 30 ; index_to_number et
+ *    wheel_count convertissent entre index de bit et entier.
+ * 2) Cinq etages de balayage, choisis par la taille du tour p*29/30 :
+ *    bloc L1, tranche L2, plaque, bande directe, seaux.
+ * 3) Seaux : un premier n'est parcouru que dans la fenetre ou il
+ *    marque. Pas de roue 210 pretabule, anneau de blocs recycles.
+ * 4) Pre-crible : les premiers <= 113 en tables periodiques fusionnees
+ *    quatre par passe, AVX-512 intrinseque ou C vectorisable.
+ * 5) Tailles deduites a l'execution des caches detectes ; le segment
+ *    est amorti sur les 1/p de la bande du milieu.
+ */
+
 
 #include <stdio.h>
 #include <stdlib.h>
