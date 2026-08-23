@@ -3,6 +3,8 @@
 Ce fichier est réécrit à chaque campagne : il décrit l'état mesuré le plus
 récent, pas l'évolution dans le temps. L'évolution est dans `HISTORIQUE.md`.
 
+Les défauts sont dans `BUG.md`, le récit chronologique dans `HISTORIQUE.md`.
+
 **Règle** — aucun chiffre sans ses trois références : le commit mesuré (source
 exacte), la date et l'heure, le CPU. Chaque section ci-dessous les porte, pour
 rester lisible isolément.
@@ -131,12 +133,11 @@ Commit `9d2b576` · 2026-08-23 12:34:01–12:35:06 · i5-9300HF
 - Compilation `-Wall -Wextra` sans un seul avertissement, y compris la
   variante `-DRECOMPUTE_TURN=1`, qui donne le même résultat à 10⁹.
 
-### Défauts connus, non corrigés à ce commit
+### Défauts connus
 
-1. **Courses de données sur les drapeaux d'allocation.** `bucket_alloc_failed`
-   est écrit par plusieurs threads sans `atomic` ; `alloc_failed` est écrit en
-   `atomic write` mais lu sans. Bénin en pratique — même valeur, un `int` —
-   mais formellement indéfini.
-2. **Aucun test automatisé.** Le protocole de validation ci-dessus n'existe
-   que sous forme de commandes rejouées à la main ; il n'y a pas de cible
-   `make check`.
+Recensés dans `BUG.md`, qui fait foi. À la date de cette campagne, un seul
+reste ouvert : B5, les courses de données sur les drapeaux d'allocation.
+
+Hors défauts : il n'existe aucun test automatisé. Le protocole de validation
+ci-dessus n'est qu'une suite de commandes rejouées à la main, sans cible
+`make check`.

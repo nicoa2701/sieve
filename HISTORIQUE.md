@@ -4,7 +4,17 @@ Fichier en ajout seul : les entrées s'empilent, aucune n'est réécrite. Les
 mesures ne sont pas ici — elles sont dans `MESURES.md`, qui est réécrit à
 chaque campagne. Une entrée peut renvoyer à une campagne par son nom (`C1`…).
 
+Les défauts ont leur propre recensement dans `BUG.md`, organisé par bug et non
+par date : symptôme, cause, correctif, vérification.
+
 ---
+
+## 2026-08-23 — `BUG.md`
+
+Recensement des cinq défauts trouvés depuis l'ouverture du suivi : B1 SIGFPE
+sur `HAUT = 0`, B2 `malloc(0)`, B3 messages de borne, B4 débordement de
+`bucket_entry_t.at`, B5 courses de données sur les drapeaux d'allocation.
+Quatre corrigés, B5 ouvert avec son correctif proposé.
 
 ## 2026-08-23 — `bdce01b` · Débordement du champ `at` des seaux
 
