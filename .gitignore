@@ -2,5 +2,6 @@ roue12
 main12.o
 roue12-asan
 roue12-asan-sink
+.build-flags
 *.sw[a-p]
 .*.sw[a-p]

@@ -3,6 +3,7 @@ CFLAGS  ?= -O3 -g -Wall -Wextra
 ARCH    ?= -march=native
 
 OPENMP  := -fopenmp
+SINK    ?= 0
 
 CC_MACROS := $(shell $(CC) $(ARCH) -dM -E - < /dev/null 2>/dev/null)
 
@@ -16,7 +17,7 @@ else
 SIMD_TIER := C portable, cible scalaire
 endif
 
-.PHONY: all clean run12 simd check sanitize
+.PHONY: all clean run12 simd check sanitize force
 
 all: roue12
 	@echo "Pre-crible : $(SIMD_TIER)   [$(CC) $(ARCH)]"
@@ -32,8 +33,15 @@ simd:
 roue12: main12.o
 	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) -o $@ $^ -lm
 
-main12.o: main12.c
-	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) -DSINK_TAIL=0 -c -o $@ $<
+# Temoin des drapeaux : un changement de CC, CFLAGS, ARCH, OPENMP ou SINK
+# recompile, y compris passe en ligne de commande.
+BUILD_FLAGS := $(CC) $(CFLAGS) $(ARCH) $(OPENMP) -DSINK_TAIL=$(SINK)
+
+.build-flags: force
+	@echo '$(BUILD_FLAGS)' | cmp -s - $@ || echo '$(BUILD_FLAGS)' > $@
+
+main12.o: main12.c .build-flags
+	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) -DSINK_TAIL=$(SINK) -c -o $@ $<
 
 run12: roue12
 	./roue12 $(LOW) $(LIMIT) $(ARGS)
@@ -44,8 +52,8 @@ check: roue12
 	sh check.sh
 
 sanitize: main12.c
-	$(CC) $(SAN) $(OPENMP) -DSINK_TAIL=0 -o roue12-asan main12.c -lm
-	$(CC) $(SAN) $(OPENMP) -DSINK_TAIL=1 -o roue12-asan-sink main12.c -lm
+	$(CC) $(SAN) $(ARCH) $(OPENMP) -DSINK_TAIL=0 -o roue12-asan main12.c -lm
+	$(CC) $(SAN) $(ARCH) $(OPENMP) -DSINK_TAIL=1 -o roue12-asan-sink main12.c -lm
 	@for b in roue12-asan roue12-asan-sink; do \
 	    for t in "0" "1e8" "1e12 -d 1e8"; do \
 	        printf '%-18s %-12s ' "$$b" "$$t"; \
@@ -55,4 +63,4 @@ sanitize: main12.c
 	done
 
 clean:
-	rm -f roue12 main12.o roue12-asan roue12-asan-sink
+	rm -f roue12 main12.o roue12-asan roue12-asan-sink .build-flags
