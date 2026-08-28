@@ -3258,11 +3258,15 @@ int main(int argc, char **argv)
 
     if (bucket_bytes)
     {
-        /* L'anneau doit couvrir le plus grand saut d'un premier entre deux
-           marques : l'ecart maximal des residus de la roue 210 vaut 10, soit
-           p / 3 octets, que 2p majore largement. */
+        /* L'anneau est indexe depuis le debut du segment, sa fente 0, et
+           doit couvrir deux portees. Le saut d'un premier entre deux marques
+           d'abord : l'ecart maximal des residus de la roue 210 vaut 10, soit
+           p / 3 octets, que 2p majore largement. L'activation ensuite, qui
+           pose la premiere marque en p * p, donc n'importe ou dans le
+           segment. */
         uint64_t need =
-            2 * (uint64_t)primes[prime_count - 1] / bucket_bytes + 4;
+            (segment_bytes + 2 * (uint64_t)primes[prime_count - 1])
+            / bucket_bytes + 4;
 
         uint64_t cap_windows =
             (chunk_candidates / 8 + bucket_bytes - 1) / bucket_bytes + 2;

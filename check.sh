@@ -217,5 +217,13 @@ expect_out "fenetre 8192 KiB" 1e12 -d 1e8 -s 65536 -K 65536 -v
 expect 29997546 300000000000000 -d 1e9 -s 65536 -K 16384 -J 1
 expect 29997546 300000000000000 -d 1e9 -s 65536 -K 65536 -J 1
 
+# B6 : l'anneau de seaux doit couvrir l'activation d'un premier dont le carre
+# tombe dans le segment courant. Il faut donc un segment large et une borne
+# au-dela du carre du seuil des seaux. Les deux intervalles sont comptes par
+# primesieve 12.10, le dernier controle est pi(10^10).
+expect 21201526   17180000000 -d 5e8 -s 1024 -J 1
+expect 22484495   4300000000 -d 5e8 -s 512 -J 1
+expect 455052511  1e10 -s 1024 -J 1
+
 printf '\n%d reussite(s), %d echec(s)\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
