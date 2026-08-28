@@ -14,10 +14,11 @@ mesure dans `MESURES.md`.
 | B3 | Messages de borne trompeurs | corrigé | `2124de7` | `make check` |
 | B4 | Débordement de `bucket_entry_t.at` | corrigé | `bdce01b` | `make check` |
 | B5 | Courses de données sur les drapeaux d'allocation | corrigé | `1a4180e` | **aucune** |
+| B6 | Débordement de l'anneau de seaux à l'activation | corrigé | non commité | `make check` |
 
-`make check` a été validé par réinjection : chacun des quatre défauts remis
-dans le code fait échouer la suite, et B1 en fait tomber cinq contrôles à lui
-seul. B5 reste sans garde-fou, pour la raison exposée dans son entrée.
+`make check` a été validé par réinjection : chacun des cinq défauts testés
+remis dans le code fait échouer la suite, et B1 en fait tomber cinq contrôles à
+lui seul. B5 reste sans garde-fou, pour la raison exposée dans son entrée.
 
 ---
 
@@ -270,3 +271,138 @@ d'allocation : en marche normale, le chemin n'est jamais pris. Forcer cet
 échec demande d'interposer `calloc`, ce qui casse soit libgomp, soit
 ThreadSanitizer lui-même, incompatible avec `LD_PRELOAD`. La course reste donc
 établie par lecture du code, pas par observation.
+
+---
+
+## B6 — Débordement de l'anneau de seaux à l'activation
+
+**État** : corrigé · non commité · 2026-08-28
+
+**Sévérité.** Écriture hors bornes du tas, donc corruption ; en pratique
+`SIGSEGV` immédiat sur les configurations essayées.
+
+**Symptôme.** `./roue12 1e11 -s 2048 -J 4 -v` se termine par
+`Segmentation fault (core dumped)`, code retour 139, avant la moindre sortie.
+Sous ASan :
+
+```
+ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 8
+    #0 bucket_push main12.c:827
+    #1 sieve_segment main12.c:1802
+0x51100001a060 is located 32 bytes after 256-byte region
+allocated by ... calloc ... main12.c:3302
+```
+
+soit `ring.cur`, dimensionné à 32 pointeurs, indexé au-delà.
+
+**Cause.** `ring.cur` est indexé par le décalage en fenêtres depuis le début
+du segment courant, qui est sa fente 0. `bucket_push` fait `&r->cur[d]` sans
+borne, et les deux sites d'appel ne vérifient que l'appartenance au chunk :
+`gw0 + skip < chunk_windows` à l'activation, `skip < left` au balayage. C'est
+donc le dimensionnement de `ring_slots` qui doit majorer `skip`, et il ne
+couvrait qu'une des deux portées :
+
+```c
+/* L'anneau doit couvrir le plus grand saut d'un premier entre deux
+   marques : l'ecart maximal des residus de la roue 210 vaut 10, soit
+   p / 3 octets, que 2p majore largement. */
+uint64_t need = 2 * (uint64_t)primes[prime_count - 1] / bucket_bytes + 4;
+```
+
+Le raisonnement est juste, mais il ne couvre que la **réinsertion** du
+balayage, où un premier ressort au plus loin d'un écart de résidus. Il ne dit
+rien de l'**activation**, qui pose la première marque de `p` en `p * p` : pour
+un premier dont le carré tombe dans le segment courant, ce point est
+n'importe où dans le segment, sans rapport avec `p`. Le terme manquant est
+donc `segment_bytes`, et le débordement s'ouvre dès que le segment dépasse
+l'anneau — soit, l'arrondi à la puissance de deux près, dès qu'il approche
+`2 p_max` octets.
+
+L'autre entrée de l'activation, elle, était bien couverte : quand `p * p`
+précède le segment, le cofacteur `ceil(low / p)` est arrondi au résidu suivant
+de la roue 210, ce qui ajoute au plus 10 unités, soit `p / 3` octets — le même
+majorant que le balayage.
+
+Instrumenté au site d'appel, `1e11 -s 2048 -J 4` donne `p = 131671`,
+`skip = 36` pour `slots = 32`, avec une fenêtre de 32 KiB et un segment de
+2048 KiB — soit 64 fenêtres par segment, déjà le double de l'anneau.
+
+**Correctif.** Le dimensionnement majore les deux portées :
+
+```c
+-        uint64_t need =
+-            2 * (uint64_t)primes[prime_count - 1] / bucket_bytes + 4;
++        uint64_t need =
++            (segment_bytes + 2 * (uint64_t)primes[prime_count - 1])
++            / bucket_bytes + 4;
+```
+
+Le majorant `2p` d'origine est conservé — il couvre les deux termes en `p`,
+le saut du balayage et l'arrondi du cofacteur — et `segment_bytes` ajoute la
+portée qui manquait. Le plafonnement existant par `cap_windows` reste en
+place : il est licite, les deux sites refusant déjà tout `skip` au-delà du
+chunk.
+
+Coût : quelques pointeurs de plus par thread, et autant de `memmove` d'un cran
+par fenêtre. À `10¹¹` avec `-s 2048`, l'anneau passe de 32 à 128 fentes, soit
+1 KiB par thread. Mesuré en A/B entrelacé, meilleur de sept passages,
+refroidissement de 10 s entre chaque, sur i5-9300HF le 2026-08-28 :
+
+| | Avant | Après |
+|---|---|---|
+| `1e11` (défaut, seaux inactifs) | 3,68 s | 3,60 s |
+| `1e11 -s 2048` (anneau 32 → 128) | 6,60 s | 6,83 s |
+
+Soit environ 3 % sur la configuration touchée, dans la bande de bruit de la
+machine.
+
+**Atteignabilité.** Trois conditions à réunir. Des premiers de la bande des
+seaux doivent être *activés* dans un segment, donc une borne au-delà de
+`p_bucket²`. Le segment doit être large devant `2 p_max`, ce qui demande un
+`-s` explicite : le segment par défaut est dérivé du L3 par thread, et
+`p_bucket` en découle, si bien que les deux grandeurs restent liées. Enfin les
+intervalles étroits sont hors d'atteinte, `cap_windows` y ramenant l'anneau à
+la largeur du chunk, que les deux sites refusent déjà de dépasser.
+
+Vérifié sur la configuration par défaut : `./roue12 7e12`, première borne
+au-delà de `p_bucket²` = 6,9·10¹², passe sans un débordement sous garde-fou
+(245 277 688 804 premiers, 1173 s).
+
+**Détection.** Essai manuel d'une configuration d'étages que `check.sh` ne
+couvrait pas : les quatorze configurations de la section « cohérence » ne
+tournent qu'à `10⁹` et sur un intervalle de `10⁵`, deux régimes où aucun
+premier n'atteint les seaux.
+
+**Vérification.** π(10¹¹) = 4 118 054 813, et les comptes d'intervalles donnés
+par primesieve 12.10. Colonne « avant » relevée avec un garde-fou
+`d >= r->slots` posé dans `bucket_push`, qui distingue le débordement effectif
+du plantage observable.
+
+| Configuration à 10¹¹ | Avant | Après |
+|---|---|---|
+| défaut | aucun débordement ✅ | ✅ |
+| `-s 512` | aucun débordement ✅ | ✅ |
+| `-s 2048` | aucun débordement ✅ | ✅ |
+| `-J 4` | aucun débordement ✅ | ✅ |
+| `-s 2048 -J 4` | `d=36 slots=32` → SIGSEGV ❌ | ✅ |
+| `-s 2048 -J 16` | aucun débordement ✅ | ✅ |
+| `-s 16384 -J 1` | `d=33 slots=32` → SIGSEGV ❌ | ✅ |
+| `-s 65536 -J 1` | `d=1100 slots=32` → SIGSEGV ❌ | ✅ |
+| `-s 2048 -K 32 -J 4` | `d=36 slots=32` → SIGSEGV ❌ | ✅ |
+
+Le garde-fou a ensuite tourné sur 232 configurations — bornes `10⁹`, `10¹⁰`,
+`10¹¹`, intervalles hauts jusqu'à `3·10¹⁴`, `-s` de 32 à 65536 KiB, `-K` de 32
+à 65536 KiB, `-J` 1, 4, 16 — sans un débordement et avec le compte attendu
+partout. `make sanitize` repasse sans trouvaille, et la commande d'origine
+sous ASan donne le compte juste.
+
+**Non-régression.** Trois contrôles ajoutés à `check.sh`, 0,35 s à eux trois —
+la suite passe de 121 contrôles en 9,5 s à 124 en 9,8 s :
+
+```sh
+expect 21201526   17180000000 -d 5e8 -s 1024 -J 1
+expect 22484495   4300000000 -d 5e8 -s 512 -J 1
+expect 455052511  1e10 -s 1024 -J 1
+```
+
+Les trois plantent la version d'avant correctif.

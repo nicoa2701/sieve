@@ -142,7 +142,13 @@ Le protocole est figé dans `check.sh` et rejouable :
 
 ### Défauts connus
 
-Recensés dans `BUG.md`, qui fait foi. Les cinq sont corrigés.
+Recensés dans `BUG.md`, qui fait foi. Les six sont corrigés.
 
 Hors défauts : B5 n'a pas de test de non-régression, aucun outil n'atteignant
 proprement son chemin d'échec.
+
+**B6 est postérieur à cette campagne** : le débordement de l'anneau de seaux
+a été trouvé le 2026-08-28, après la mesure. Son correctif agrandit l'anneau,
+donc le `memmove` d'un cran par fenêtre. Les chiffres ci-dessus n'ont pas été
+rejoués ; un contrôle A/B entrelacé sur la configuration par défaut à 10¹¹
+figure dans l'entrée B6 de `BUG.md`.

@@ -9,6 +9,44 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-28 — B6 · Débordement de l'anneau de seaux à l'activation
+
+`./roue12 1e11 -s 2048 -J 4 -v` plantait par `SIGSEGV`. ASan pointe une
+lecture hors bornes dans `bucket_push`, sur `ring.cur` : l'anneau était
+dimensionné pour la seule portée du balayage — l'écart entre deux marques d'un
+même premier, `p / 3` octets, que `2p` majore — alors que l'activation pose la
+première marque en `p * p`, donc n'importe où dans le segment. Le terme
+`segment_bytes` manquait : `need = (segment_bytes + 2 p) / fenetre + 4`.
+
+Le détail est dans `BUG.md`, entrée B6. Trois contrôles ajoutés à `check.sh`,
+choisis courts : 0,35 s à eux trois, la suite passe de 121 contrôles en 9,5 s
+à 124 en 9,8 s.
+Un garde-fou temporaire `d >= r->slots` posé dans `bucket_push` a servi à
+séparer le débordement effectif du plantage observable, et à balayer 232
+configurations. Une première rédaction du correctif majorait l'arrondi du
+cofacteur par un tour de roue entier ; l'écart maximal des résidus vaut 10, ce
+que `2p` couvrait déjà.
+
+Le défaut était hors d'atteinte de `check.sh` : ses quatorze configurations
+d'étages ne tournent qu'à `10⁹` et sur un intervalle de `10⁵`, deux régimes où
+aucun premier n'atteint les seaux. Les nouveaux contrôles ferment ce trou.
+
+## 2026-08-28 — Makefile : témoin des drapeaux, `ARCH` sous sanitizer, `SINK`
+
+Trois corrections, aucune sur le code :
+
+- `sanitize` ne passait pas `$(ARCH)`. Sur une machine AVX-512, les deux
+  binaires ASan compilaient donc la voie C portable, et le bloc
+  `_mm512_*` — le seul code à charger et ranger à la main — n'était jamais
+  sanitizé.
+- `main12.o` ne dépendait que de `main12.c` : changer `CFLAGS`, `OPENMP` ou
+  `SINK_TAIL` laissait l'objet périmé en place, sans le dire. Un témoin
+  `.build-flags` enregistre la ligne de drapeaux et force la recompilation
+  quand elle change, y compris passée en ligne de commande. Une dépendance sur
+  `Makefile` seule ne suffisait pas : `make SINK=1` répondait « up to date ».
+- `SINK_TAIL` était figé à 0 dans la règle. `SINK ?= 0` rend la variante
+  mesurable en `-O3`, alors qu'elle n'existait qu'en `-O1` sous sanitizer.
+
 ## 2026-08-23 — Campagne C2, refroidissement entre passages
 
 `MESURES.md` réécrit : C2 remplace C1. Seul changement de méthode, un
