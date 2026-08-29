@@ -9,6 +9,107 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-29 — Profil à 10¹⁵ · La division de la ligne 1927 n'était pas le coût
+
+C3 se reprochait de ne pas dire *où* passent les 18 % de retard à 10¹⁵ :
+l'ablation dit ce que coûte couper un étage, pas ce que coûte le garder. Ce
+profil répond à la question, et se trompe une fois en chemin.
+
+**Le profil, en regard d'une borne où les seaux sont hors service.** Temps CPU,
+16 threads, attribution par ligne source — le rapport par symbole ne montre que
+`main._omp_fn.0` à 48 %, tout étant inliné.
+
+```
+                                    [1e15,+1e10]   [1e13,+1e10]
+  sweep_over                            22,5 %         49,6 %
+  sweep_exact_calc                      20,5 %         30,5 %
+  sieve_segment, dont activation        20,2 %          2,3 %
+      (le seul bloc d'activation)      (17,6 %)        (0,00 %)
+  sweep_bucketed                        16,3 %            —
+  bucket_push                            9,1 %            —
+  libgomp                                2,6 %          3,9 %
+```
+
+**43 % du temps CPU à 10¹⁵ est la machinerie des seaux**, dont rien n'existe à
+10¹³. C'est là qu'est le régime distancé, et c'est cohérent avec C3 : couper
+les seaux coûtait 21 %, la plaque 14 %.
+
+**La piste fausse.** La ligne la plus chaude de tout le programme était
+`main12.c:1927`, à 4,04 % — `m = (low + p - 1) / p`, une division 64 bits par
+une variable, les deux autres divisions du bloc étant par des constantes et
+déjà transformées par le compilateur. Les compteurs matériels semblaient
+confirmer :
+
+```
+                          [1e15,+1e10]   [1e13,+1e10]
+  ex_div_count              173,8 M         19,2 M
+  ex_div_busy              1,23 G cycles   0,13 G
+                          (5,6 % des cycles)
+```
+
+Et le compte de divisions est exactement linéaire en nombre de chunks —
+2,66 M par chunk, de 4 chunks (12,5 M) à 159 chunks (423 M). Chacun des
+~1,9 M premiers de criblage est donc réactivé **dans chaque chunk**, un chunk
+pouvant démarrer n'importe où. Ce qui explique enfin le `-c 1` à +28 % de C3,
+resté sans mécanisme.
+
+**Le correctif a été écrit, et il marche — sauf sur le temps.** Réciproque
+entière `M = floor(2^64 / p)` précalculée une fois par premier, puis
+`ceil(low/p)` par multiplication haute 128 bits et au plus une correction
+(l'écart au quotient vaut au plus `low·r/(p·2^64) < low/2^64 < 1`, quelle que
+soit la borne).
+
+```
+  divisions materielles          174,2 M  ->  36,3 M     -79 %
+  part du bloc d'activation       17,64 %  ->  12,85 %
+  comptes sur quatre bornes      identiques, check 127/127
+  temps a [1e15, +1e10]           337,2 ms ->  336,2 ms   -0,3 %
+```
+
+A/B entrelacé, meilleur de 7 ; et sur les six points de 10¹⁰ à 10¹⁵, tout
+tient dans ±1,7 %. Une troisième variante a écarté l'explication paresseuse
+— « les 15,7 Mo du tableau mangent le gain » : tableau alloué et rempli mais
+division conservée, 335,5 ms. Les trois variantes sont indiscernables. Ni le
+tableau ne coûte, ni la division ne coûtait.
+
+**Le mécanisme de l'erreur.** Le diviseur est une unité séparée : `ex_div_busy`
+mesure son **occupation**, jamais le chemin critique. À cette borne la boucle
+d'activation attend la mémoire — les écritures dispersées d'entrées de seau —
+et l'exécution dans le désordre recouvre entièrement les ~7 cycles de chaque
+division. Les 4,04 % d'échantillons sur la ligne 1927 sont l'artefact classique
+de l'attribution par ligne, qui crédite l'instruction à longue latence quand
+ses voisines sont bloquées sur la mémoire. Les deux compteurs disaient la même
+chose, et aucun des deux ne disait « chemin critique ». Le correctif n'est pas
+retenu.
+
+**Ce qui survit.** Le coût de l'activation est réel mais il est en trafic
+mémoire, pas en arithmétique : 1,58 M d'entrées de seau reposées à chaque
+chunk. D'où le seul levier mesuré, qui a maintenant son mécanisme —
+`-c 4` (40 chunks au lieu de 80) donne −8,8 % à 10¹⁵, meilleur de 7 entrelacé,
+ce qui ramènerait le rapport de 0,82× à 0,89×. Mais ce n'est pas un défaut à
+changer :
+
+```
+  borne        defaut    -c 4
+  10^12       107,0 ms  120,0 ms   +12,1 %
+  10^13       149,6 ms  162,3 ms    +8,5 %
+  10^14       220,8 ms  212,1 ms    -3,9 %
+  10^15       333,3 ms  304,1 ms    -8,8 %
+```
+
+Sous le seuil des seaux il n'y a aucune activation à économiser, et agrandir
+les chunks ne fait que dégrader l'équilibrage. Reste à faire :
+`default_chunk_bytes` dépendant du régime, gros chunks quand les premiers
+passent par les seaux, petits sinon.
+
+**Note d'outil.** `DEBUGINFOD_URLS` pointe sur `debuginfod.ubuntu.com` dans cet
+environnement. Toute résolution fine — `-s srcline`, `--inline`, `annotate` —
+part alors en requêtes réseau et `perf report` se bloque plusieurs minutes,
+sans message. `export DEBUGINFOD_URLS=` avant tout `perf report` : le même
+rapport sort en une seconde.
+
+---
+
 ## 2026-08-29 — C3 · Campagne de mesure sur le 9700X
 
 `MESURES.md` décrivait encore C2 : l'i5-9300HF, le commit `491cd40`,
