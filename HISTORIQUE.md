@@ -9,6 +9,47 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-29 — `ea7124b` · Amorces criblées par la roue 30 du programme
+
+Second palier sur `generate_base_primes`, après les impairs segmentés du même
+jour. La fonction n'a plus de crible à elle : elle emprunte celui du programme
+— `sweep_exact_calc` pour le marquage, `activate_prime` pour poser chaque
+amorce, `index_to_number` pour relire. Un octet porte 30 entiers au lieu de 2,
+et l'extraction lit le bitset par mots de 64 bits, un `ctz` par premier trouvé.
+Elle a dû être déplacée après `sweep_exact_calc`, dont elle dépend désormais.
+
+C'est le principe de `SievingPrimes` dans primesieve : le crible se sert
+lui-même, au lieu d'entretenir une routine séparée et moins bonne.
+
+Générateur mesuré isolément sur i5 : 45 → 10,8 ms à racine(10¹⁵),
+142 → 35,3 ms à racine(10¹⁶). Sortie identique à une référence indépendante,
+bornes 0 à 5000 exhaustivement et sous les deux variantes `SINK_TAIL`.
+
+Mesures d'ensemble sur Ryzen 7 9700X, 16 threads, machine dédiée, meilleur de
+3, refroidissement proportionnel — la campagne porte un témoin de dérive, trois
+passages de primesieve à la fin, ici stables à 1,8 % près :
+
+```
+                 cout fixe (-d 1)      intervalle 1e10, vs primesieve 12.15
+  10^13        7,6 -> 5,3 ms          1,11x -> 1,13x
+  10^14       18,4 -> 11,0 ms         0,94x -> 0,97x
+  10^15       48,2 -> 25,5 ms         0,77x -> 0,81x
+```
+
+Cumulé avec le palier précédent, le rapport à 10¹⁵ passe de 0,66× à 0,81× : le
+retard tombe de 34 % à 19 %, et 10¹⁴ revient à l'égalité.
+
+**Cette piste est épuisée.** Il reste 25,5 ms de coût fixe sur 333 ms à 10¹⁵,
+et ce résidu n'est plus la génération des amorces mais le pré-crible, les
+tables de tours et les allocations. Les 19 % de retard restants sont dans le
+criblage lui-même.
+
+Une première campagne de mesure, menée sur le portable en fin de session, avait
+été jetée : `primesieve` y passait de 1,22 à 1,93 s sur une commande inchangée,
+la machine ayant dérivé de 50 %. D'où le témoin de dérive, désormais systématique.
+
+---
+
 ## 2026-08-29 — `90314e1` · Premiers de base, impairs seuls et par segments
 
 `generate_base_primes` tenait un octet par entier et criblait d'un bloc. À
