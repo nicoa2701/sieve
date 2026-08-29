@@ -14,7 +14,8 @@ mesure dans `MESURES.md`.
 | B3 | Messages de borne trompeurs | corrigé | `2124de7` | `make check` |
 | B4 | Débordement de `bucket_entry_t.at` | corrigé | `bdce01b` | `make check` |
 | B5 | Courses de données sur les drapeaux d'allocation | corrigé | `1a4180e` | **aucune** |
-| B6 | Débordement de l'anneau de seaux à l'activation | corrigé | non commité | `make check` |
+| B6 | Débordement de l'anneau de seaux à l'activation | corrigé | `e29ec95` | `make check` |
+| B7 | Débordement de `chunk_segments * segment_bits` sur `-c` | corrigé | non commité | `make check` |
 
 `make check` a été validé par réinjection : chacun des cinq défauts testés
 remis dans le code fait échouer la suite, et B1 en fait tomber cinq contrôles à
@@ -406,3 +407,87 @@ expect 455052511  1e10 -s 1024 -J 1
 ```
 
 Les trois plantent la version d'avant correctif.
+
+---
+
+## B7 — Débordement de `chunk_segments * segment_bits` sur `-c`
+
+**État** : corrigé · non commité · 2026-08-29
+
+**Sévérité.** Compte faux, silencieux, avec code de retour 0. C'est le seul
+défaut recensé ici qui rende un résultat erroné sans le signaler.
+
+**Symptôme.** À segment de 128 KiB, donc `segment_bits = 2²⁰` :
+
+```
+$ ./roue12 1e9 -s 128 -c 17592186044416
+Found 30 primes up to 1000000000 using 8 threads, segment 128 KiB in 1.4 ms
+$ echo $?
+0
+```
+
+30 au lieu de 50 847 534. Avec `-c 17592186044417` on obtient 278 737, avec
+`-c 18446744073709551615` de nouveau 30.
+
+**Cause.** `-c` alimente `chunk_override` sans plafond, et `chunk_segments`
+le reprend tel quel :
+
+```c
+if (chunk_override)
+{
+    chunk_segments = chunk_override;
+}
+...
+uint64_t chunk_candidates = chunk_segments * segment_bits;
+```
+
+`2⁴⁴ × 2²⁰ = 2⁶⁴` : le produit est nul modulo 2⁶⁴, donc `chunk_candidates`
+vaut 0, `chunk_end == chunk_first`, et la boucle des segments ne tourne pas.
+Les 30 restants sont 2, 3, 5 et les 27 premiers du pré-crible, comptés hors
+crible. Avec `2⁴⁴ + 1`, le produit retombe à `2²⁰` : un seul segment est
+criblé, d'où 278 737.
+
+Rien n'est écrit hors bornes et aucun sanitizer ne s'en émeut — c'est une
+arithmétique modulaire parfaitement définie, qui produit simplement un domaine
+plus petit que celui demandé. Le débordement s'ouvre dès
+`-c ≥ 2⁶⁴ / segment_bits`, soit 2⁴⁴ au segment par défaut de ce test.
+
+**Correctif.** Le nombre de segments par chunk n'a aucun sens au-delà du
+nombre total de segments : le plafonner y suffit, et ne change rien aux
+valeurs utiles.
+
+```c
+if (chunk_override)
+{
+    /* Plafonne a la plage entiere : au-dela, chunk_segments *
+       segment_bits deborde et chunk_candidates retombe sous la
+       taille reelle, ne criblant qu'une partie du domaine. */
+    chunk_segments =
+        chunk_override < total_segments ? chunk_override
+                                        : total_segments;
+
+    if (chunk_segments == 0)
+        chunk_segments = 1;
+}
+```
+
+Le second garde-fou couvre `total_segments == 0`, qui survient sur un
+intervalle vide et donnerait une division par zéro au calcul de `chunk_count`.
+
+**Vérification.** Les douze options numériques ont été passées à `0`, `1`,
+`2³²`, `2⁴⁴` et `UINT64_MAX`, soit 60 combinaisons comparées à π(10⁹) : `-c`
+était la seule touchée, et plus aucune ne diverge après correctif.
+`make sanitize` repasse sans trouvaille, et la compilation reste sans
+avertissement sous `-Wall -Wextra`, y compris sans `-fopenmp` et avec
+`-DRECOMPUTE_TURN=1`.
+
+**Non-régression.** Trois contrôles ajoutés à `check.sh` — la suite passe de
+124 contrôles à 127, de 9,8 s à 11,2 s :
+
+```sh
+expect 50847534 1e9 -s 128 -c 17592186044416
+expect 50847534 1e9 -s 128 -c 17592186044417
+expect 50847534 1e9 -s 128 -c 18446744073709551615
+```
+
+Les trois donnent 30, 278 737 et 30 sur la version d'avant correctif.

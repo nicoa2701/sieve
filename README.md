@@ -39,7 +39,7 @@ the pre-sieve; `make simd` shows the detection in detail.
 ```bash
 ./roue12 1e13 -d 1e11   # count inside [10¹³, 10¹³ + 10¹¹]
 ./roue12 -v 1e12        # show the sizing actually chosen
-make check              # 121 validation checks
+make check              # 127 validation checks
 make sanitize           # ASan + UBSan, both SINK_TAIL variants
 ```
 
@@ -243,7 +243,7 @@ Each of the five stages switches off with `0`.
 ## Validation
 
 ```bash
-make check      # 121 checks, 0 failures
+make check      # 127 checks, 0 failures
 make sanitize   # ASan + UBSan, both SINK_TAIL variants
 ```
 
