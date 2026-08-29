@@ -19,7 +19,7 @@
 
 ```console
 $ ./roue12 1e12
-Found 37607912018 primes up to 1000000000000
+Found 37607912018 primes up to 1000000000000 using 16 threads, segment 2048 KiB in 8.961s
 ```
 
 > **π(10¹⁵) = 29,844,570,422,669** — counted in 5 h 24 min on a Ryzen 7 9700X.
