@@ -115,189 +115,6 @@ static uint64_t count_set_bits(const uint8_t *bits,
 
 
 /*
- * Premiers de base jusqu'a `limit`, impairs seuls et par segments.
- * L'ancien Eratosthene tenait un octet par entier : a racine(10^15) il
- * parcourait 31 Mo en acces disperses, soit un cout fixe de 373 ms que les
- * intervalles etroits payaient plein tarif. Ici la fenetre active tient en
- * cache et seuls les impairs sont representes.
- */
-#define BASE_SEGMENT_BYTES (32 * 1024)
-
-static uint32_t *generate_base_primes(uint64_t limit,
-                                      size_t *count)
-{
-    size_t cap = 1024;
-    size_t n   = 0;
-
-    uint32_t *primes = malloc(cap * sizeof *primes);
-
-    if (!primes)
-    {
-        fprintf(stderr, "allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    *count = 0;
-
-    if (limit < 2)
-        return primes;
-
-    primes[n++] = 2;
-
-    if (limit < 3)
-    {
-        *count = n;
-
-        return primes;
-    }
-
-    /* Amorces : premiers impairs jusqu'a racine(limit), indice i pour 2i+1. */
-    uint64_t root = (uint64_t)sqrt((double)limit);
-
-    while ((root + 1) <= limit / (root + 1))
-        root++;
-
-    while (root && root > limit / root)
-        root--;
-
-    size_t sn = (size_t)(root / 2) + 1;
-
-    uint8_t *seed = malloc(sn);
-
-    if (!seed)
-    {
-        fprintf(stderr, "allocation failed\n");
-        free(primes);
-        exit(EXIT_FAILURE);
-    }
-
-    memset(seed, 1, sn);
-
-    seed[0] = 0;
-
-    for (size_t i = 1; i < sn; i++)
-    {
-        uint64_t p = 2 * (uint64_t)i + 1;
-
-        if (!seed[i] || p * p > root)
-            continue;
-
-        for (uint64_t j = p * p / 2; j < sn; j += p)
-            seed[j] = 0;
-    }
-
-    size_t ns = 0;
-
-    for (size_t i = 1; i < sn; i++)
-    {
-        if (seed[i])
-            ns++;
-    }
-
-    /* sp[k] est l'amorce, nx[k] son prochain multiple impair a rayer. */
-    uint64_t *sp = malloc((ns ? ns : 1) * sizeof *sp);
-    uint64_t *nx = malloc((ns ? ns : 1) * sizeof *nx);
-
-    uint8_t *blk = malloc(BASE_SEGMENT_BYTES);
-
-    if (!sp || !nx || !blk)
-    {
-        fprintf(stderr, "allocation failed\n");
-        free(seed);
-        free(sp);
-        free(nx);
-        free(blk);
-        free(primes);
-        exit(EXIT_FAILURE);
-    }
-
-    ns = 0;
-
-    for (size_t i = 1; i < sn; i++)
-    {
-        if (seed[i])
-        {
-            sp[ns] = 2 * (uint64_t)i + 1;
-            nx[ns] = sp[ns] * sp[ns];
-            ns++;
-        }
-    }
-
-    free(seed);
-
-    for (uint64_t lo = 3;
-         lo <= limit;
-         lo += 2 * (uint64_t)BASE_SEGMENT_BYTES)
-    {
-        uint64_t hi = lo + 2 * (uint64_t)BASE_SEGMENT_BYTES - 2;
-
-        if (hi > limit)
-            hi = limit;
-
-        size_t cnt = (size_t)((hi - lo) / 2) + 1;
-
-        memset(blk, 1, cnt);
-
-        for (size_t k = 0; k < ns; k++)
-        {
-            uint64_t p = sp[k];
-            uint64_t m = nx[k];
-
-            if (m > hi)
-                continue;
-
-            if (m < lo)
-                m = lo + ((p - (lo % p)) % p);
-
-            /* Les paires ne sont pas representees : garder un multiple impair. */
-            if ((m & 1) == 0)
-                m += p;
-
-            for (; m <= hi; m += 2 * p)
-                blk[(m - lo) / 2] = 0;
-
-            nx[k] = m;
-        }
-
-        for (size_t i = 0; i < cnt; i++)
-        {
-            if (!blk[i])
-                continue;
-
-            if (n == cap)
-            {
-                cap *= 2;
-
-                uint32_t *grown = realloc(primes, cap * sizeof *primes);
-
-                if (!grown)
-                {
-                    fprintf(stderr, "allocation failed\n");
-                    free(primes);
-                    free(sp);
-                    free(nx);
-                    free(blk);
-                    exit(EXIT_FAILURE);
-                }
-
-                primes = grown;
-            }
-
-            primes[n++] = (uint32_t)(lo + 2 * (uint64_t)i);
-        }
-    }
-
-    free(sp);
-    free(nx);
-    free(blk);
-
-    *count = n;
-
-    return primes;
-}
-
-
-/*
  * wheel_mask[rc][j] efface le bit du residu (residues[rc] * residues[j]) % 30 :
  * la classe du multiple p * (30q + residues[j]) quand p % 30 == residues[rc].
  */
@@ -1321,6 +1138,214 @@ done:
     c->next = (int32_t)(base - sub);
     c->j    = j;
 }
+
+/*
+ * Premiers de base jusqu'a `limit`, par le crible du programme lui-meme.
+ *
+ * Un octet porte 30 entiers au lieu de 2 : la fenetre active tient en L1 et
+ * le balayage reutilise sweep_exact_calc, donc la roue 30 et ses masques.
+ * L'extraction lit le bitset par mots de 64 bits, un ctz par premier trouve.
+ * 2, 3 et 5 ne sont pas sur la roue et sont emis a part ; les amorces
+ * jusqu'a racine(limit) sortent d'un crible impair trivial a cette taille.
+ */
+#define BASE_SEGMENT_BYTES (32 * 1024)
+
+static uint32_t *generate_base_primes(uint64_t limit,
+                                      size_t *count)
+{
+    size_t cap = 1024;
+    size_t n   = 0;
+
+    uint32_t *primes = malloc(cap * sizeof *primes);
+
+    if (!primes)
+    {
+        fprintf(stderr, "allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
+
+    *count = 0;
+
+#define BASE_PUSH(v)                                                    \
+    do {                                                                \
+        if (n == cap)                                                   \
+        {                                                               \
+            uint32_t *grown = realloc(primes, cap * 2 * sizeof *primes);\
+                                                                        \
+            if (!grown)                                                 \
+            {                                                           \
+                fprintf(stderr, "allocation failed\n");                 \
+                free(primes);                                           \
+                exit(EXIT_FAILURE);                                     \
+            }                                                           \
+                                                                        \
+            primes = grown;                                             \
+            cap   *= 2;                                                 \
+        }                                                               \
+                                                                        \
+        primes[n++] = (uint32_t)(v);                                    \
+    } while (0)
+
+    if (limit >= 2) BASE_PUSH(2);
+    if (limit >= 3) BASE_PUSH(3);
+    if (limit >= 5) BASE_PUSH(5);
+
+    if (limit < 7)
+    {
+        *count = n;
+
+        return primes;
+    }
+
+    build_wheel210();
+
+    uint64_t root = (uint64_t)sqrt((double)limit);
+
+    while ((root + 1) <= limit / (root + 1))
+        root++;
+
+    while (root && root > limit / root)
+        root--;
+
+    /* Amorces : premiers impairs de [7, root], indice i pour 2i+1. */
+    size_t sn = (size_t)(root / 2) + 1;
+
+    uint8_t *seed = malloc(sn);
+
+    if (!seed)
+    {
+        fprintf(stderr, "allocation failed\n");
+        free(primes);
+        exit(EXIT_FAILURE);
+    }
+
+    memset(seed, 1, sn);
+
+    seed[0] = 0;
+
+    for (size_t i = 1; i < sn; i++)
+    {
+        uint64_t p = 2 * (uint64_t)i + 1;
+
+        if (!seed[i] || p * p > root)
+            continue;
+
+        for (uint64_t j = p * p / 2; j < sn; j += p)
+            seed[j] = 0;
+    }
+
+    size_t ns = 0;
+
+    for (size_t i = 3; i < sn; i++)
+    {
+        if (seed[i])
+            ns++;
+    }
+
+    uint32_t       *sp  = malloc((ns ? ns : 1) * sizeof *sp);
+    wheel_cursor_t *cur = malloc((ns ? ns : 1) * sizeof *cur);
+    uint8_t        *ok  = calloc(ns ? ns : 1, 1);
+    uint8_t        *bits = aligned_alloc(64, BASE_SEGMENT_BYTES + 64);
+
+    if (!sp || !cur || !ok || !bits)
+    {
+        fprintf(stderr, "allocation failed\n");
+        free(seed);
+        free(sp);
+        free(cur);
+        free(ok);
+        free(bits);
+        free(primes);
+        exit(EXIT_FAILURE);
+    }
+
+    ns = 0;
+
+    for (size_t i = 3; i < sn; i++)
+    {
+        if (seed[i])
+            sp[ns++] = (uint32_t)(2 * i + 1);
+    }
+
+    free(seed);
+
+    const uint64_t total    = wheel_count(limit);
+    const uint64_t seg_bits = (uint64_t)BASE_SEGMENT_BYTES * 8;
+
+    for (uint64_t first = 0; first < total; first += seg_bits)
+    {
+        uint64_t nbits = total - first;
+
+        if (nbits > seg_bits)
+            nbits = seg_bits;
+
+        uint64_t nbytes = (nbits + 7) >> 3;
+
+        memset(bits, 0xFF, nbytes);
+
+        uint64_t low  = index_to_number(first);
+        uint64_t high = index_to_number(first + nbits - 1);
+
+        for (size_t k = 0; k < ns; k++)
+        {
+            uint64_t p = sp[k];
+
+            /* sp est croissant : au-dela, plus rien ne marque ce segment. */
+            if (p * p > high)
+                break;
+
+            if (!ok[k])
+            {
+                activate_prime(sp[k], first, low, &cur[k]);
+                ok[k] = 1;
+            }
+
+            sweep_exact_calc(bits, &cur[k], sp[k],
+                             (int64_t)nbytes, (int64_t)nbytes,
+                             (int64_t)nbytes,
+                             (unsigned)residue_to_index[sp[k] % 30]);
+        }
+
+        /* Le bit 0 porte 1, qui n'est pas premier. */
+        if (first == 0)
+            clear_bit(bits, 0);
+
+        uint64_t words = (nbits + 63) >> 6;
+
+        for (uint64_t w = 0; w < words; w++)
+        {
+            uint64_t v;
+
+            memcpy(&v, bits + w * 8, sizeof v);
+
+            uint64_t rest = nbits - w * 64;
+
+            if (rest < 64)
+                v &= (1ULL << rest) - 1;
+
+            while (v)
+            {
+                int t = __builtin_ctzll(v);
+
+                v &= v - 1;
+
+                BASE_PUSH(index_to_number(first + w * 64 + (unsigned)t));
+            }
+        }
+    }
+
+    free(sp);
+    free(cur);
+    free(ok);
+    free(bits);
+
+#undef BASE_PUSH
+
+    *count = n;
+
+    return primes;
+}
+
 
 /*
  * Variante rapide : elle ecrit un tour entier des que base < to, donc jusqu'a
