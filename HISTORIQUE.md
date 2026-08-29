@@ -9,6 +9,52 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-29 — `bdccb6f` · Le découpage en chunks suit le régime
+
+Suite directe du profil : le coût de l'activation est en trafic mémoire, et il
+est **par chunk**, pas par segment. Un chunk peut démarrer n'importe où, donc
+il repose toutes les entrées de seau avant de cribler — 1 587 772 entrées,
+80 fois, à `[10¹⁵, +10¹⁰]`.
+
+`-c 4` le confirmait à −8,8 %, mais on ne pouvait pas en faire un défaut : la
+même valeur perd 12 % à 10¹². Le défaut devient donc conditionnel plutôt que
+constant — **un chunk doit couvrir au moins 40 candidats par entrée reposée**,
+sans jamais descendre sous 2 chunks par thread. Sans premier à seau la
+contrainte est vide et le découpage ne bouge pas : c'est ce qui la rend sûre en
+bas, où il n'y a rien à amortir.
+
+```
+  borne        seaux      chunks         avant     apres
+  10^11            0   80x2 -> 80x2      85,6      84,7    -1,1 %
+  10^12            0   80x2 -> 80x2     107,3     107,7    +0,4 %
+  10^13            0   80x2 -> 80x2     144,7     146,6    +1,3 %
+  10^14       300409   80x2 -> 80x2     215,7     214,7    -0,5 %
+  5.10^14    1046258   80x2 -> 53x3     282,4     283,4    +0,4 %
+  7.10^14    1287094   80x2 -> 40x4     310,8     292,7    -5,8 %
+  10^15      1587772   80x2 -> 40x4     332,3     310,3    -6,6 %
+```
+
+A/B entrelacé, meilleur de 7, fenêtres de 10¹⁰. La règle ne mord qu'à partir de
+5·10¹⁴ et ne gagne qu'à partir de 7·10¹⁴ ; ailleurs le découpage est identique.
+Vérifiée inchangée aussi sur les comptages complets, sur une fenêtre étroite
+(`-d 1e9`, où le plancher de chunks par thread protège), sur deux fenêtres
+larges (`-d 1e11`, `-d 1e12`, où le défaut est déjà assez gros) et à `-t 4`.
+
+Le rapport 40 est **mesuré, pas dérivé**, et l'entrée le dit pour que personne
+ne le prenne pour une constante physique : balayage de `-c 1` à `-c 8` à 10¹⁴
+et 10¹⁵, optimum à 4 segments par chunk à 10¹⁵, soit 42 candidats par entrée.
+À 10¹⁴ l'optimum est plat de 2 à 6, ce qui explique que la règle puisse y
+rester inactive sans rien coûter.
+
+Le rapport à primesieve 12.15 passe de 0,82× à 0,89× à 10¹⁵ : le retard tombe
+de 18 % à 12 %. C'est le premier gain pris sur le criblage lui-même, les deux
+paliers précédents portant sur le coût fixe.
+
+`-v` annonce désormais le nombre de premiers à seau, sans quoi le découpage
+retenu n'est pas relisible.
+
+---
+
 ## 2026-08-29 — Profil à 10¹⁵ · La division de la ligne 1927 n'était pas le coût
 
 C3 se reprochait de ne pas dire *où* passent les 18 % de retard à 10¹⁵ :

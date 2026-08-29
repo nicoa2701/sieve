@@ -258,6 +258,15 @@ précédaient B6 et B7 et n'avaient pas été rejoués.
 Hors défauts : B5 n'a toujours pas de test de non-régression, aucun outil
 n'atteignant proprement son chemin d'échec.
 
+### Postérieur à la campagne
+
+`bdccb6f` élargit le découpage en chunks quand les premiers à seau sont assez
+nombreux pour que leur repose pèse. Le point `[10¹⁵, +10¹⁰]` du tableau de
+comparaison, 333,3 ms, **précède ce changement** ; l'A/B entrelacé de l'entrée
+d'historique le mesure à 310,3 ms, soit 0,89× la référence au lieu de 0,82×.
+Les autres points sont inchangés, la règle ne mordant qu'au-delà de 5·10¹⁴.
+Les chiffres ci-dessus n'ont pas été rejoués : ils décrivent `6e0ed6e`.
+
 ### Ce que cette campagne ne mesure pas
 
 - **Le comptage complet au-delà de 10¹²**, écarté pour le temps de banc. Les
