@@ -4,6 +4,7 @@
 
 **A segmented prime sieve — mod-30 wheel, five sweep stages, OpenMP**
 
+[![CI](https://github.com/nicoa2701/sieve/actions/workflows/ci.yml/badge.svg)](https://github.com/nicoa2701/sieve/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/language-C11-00599C.svg)](main12.c)
 [![Parallel](https://img.shields.io/badge/parallel-OpenMP-orange.svg)](#parallelism)

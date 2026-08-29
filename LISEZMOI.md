@@ -4,6 +4,7 @@
 
 **Crible de premiers segmenté — roue mod 30, cinq étages de balayage, OpenMP**
 
+[![CI](https://github.com/nicoa2701/sieve/actions/workflows/ci.yml/badge.svg)](https://github.com/nicoa2701/sieve/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-BSD--2--Clause-blue.svg)](LICENSE)
 [![Langage](https://img.shields.io/badge/langage-C11-00599C.svg)](main12.c)
 [![Parallèle](https://img.shields.io/badge/parall%C3%A8le-OpenMP-orange.svg)](#parallélisme)
