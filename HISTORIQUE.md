@@ -9,6 +9,85 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-29 — `90314e1` · Premiers de base, impairs seuls et par segments
+
+`generate_base_primes` tenait un octet par entier et criblait d'un bloc. À
+racine(10¹⁵) il parcourait 31 Mo en accès dispersés, à racine(10¹⁶) 100 Mo, en
+série. Invisible sur un comptage complet ; dominant sur les intervalles étroits
+à borne haute.
+
+Le crible ne porte plus que sur les impairs, par blocs de 32 KiB : la fenêtre
+active tient en cache. Les amorces jusqu'à racine(racine(limit)) sortent d'un
+crible simple, négligeable à cette taille.
+
+Le coût fixe, mesuré à `-d 1`, tombe de 435 à 76 ms à 10¹⁵. Le générateur seul
+passe de 373 à 45 ms à racine(10¹⁵). Sortie identique à l'ancienne
+implémentation, vérifiée exhaustivement de 0 à 3000 et sur six bornes jusqu'à
+10⁸. Chiffres en A/B entrelacé dans le message de commit.
+
+**Deux pistes fausses avant celle-là**, toutes deux issues d'une lecture du
+code et démenties par `perf` :
+
+- le `memmove` de rotation de l'anneau de seaux — **0,00 %** du profil, aucun
+  échantillon ;
+- le chemin des seaux lui-même — `sweep_bucketed` tombe de 22 % à 16 % du temps
+  CPU en passant de l'i5 au Zen 5, il profite donc bien du matériel.
+
+La bonne piste n'est pas venue d'une intuition sur le source mais d'une ligne
+du profil qu'il fallait convertir de temps CPU en temps mural :
+`generate_base_primes` pesait 3,7 % du CPU, mais sur huit threads dont sept
+inactifs pendant cette phase, cela faisait près de 30 % du temps mural.
+
+Reste à faire : la roue 30 bit-packée avec extraction `popcnt`/`ctz`, comme
+`SievingPrimes` dans primesieve, qui n'alloue aucune liste et sert les amorces
+au fil de l'eau. Encore un facteur 3 à 4 sur cette phase.
+
+---
+
+## 2026-08-29 — `0268245` · Dépôt public, vitrine bilingue, intégration continue
+
+Le code est passé sur GitHub. `README.md` devient la vitrine du projet et
+`LISEZMOI.md` en donne la version française, les deux liées par un sélecteur de
+langue : démarrage rapide, principes de fonctionnement, jeu complet des
+options, validation, renvois vers les trois fichiers de suivi.
+
+Intégration continue sur `push` et sur chaque PR, trois travaux en matrice
+gcc × clang : compilation et `make check`, `make sanitize`, et `-Werror` sur
+les trois variantes que la documentation annonce sans avertissement. Ce dernier
+transforme une promesse écrite en test qui casse le jour où elle cesse d'être
+vraie.
+
+Avant publication, l'historique a été réécrit deux fois : purge d'un fichier
+d'échange `nano` et d'une adresse personnelle héritée du commit initial de
+GitHub, puis retrait de mentions d'outillage dans deux messages de commit.
+La branche `main` est désormais protégée contre le `push --force`, ce qui rend
+ces réécritures délibérées plutôt qu'accessibles d'une ligne de commande.
+
+---
+
+## 2026-08-29 — B7 · Débordement de `chunk_segments * segment_bits` sur `-c`
+
+`-c` alimentait `chunk_segments` sans plafond. À 2⁴⁴ segments par chunk avec un
+bitset de 128 KiB, le produit vaut exactement 2⁶⁴ : `chunk_candidates` tombe à
+zéro, aucun segment n'est criblé, et le programme annonce 30 premiers jusqu'à
+10⁹ avec un code de retour 0.
+
+Premier défaut du recensement à rendre un compte faux **silencieusement** — les
+six autres plantaient ou refusaient. Rien n'est écrit hors bornes et aucun
+sanitizer ne s'en émeut : c'est une arithmétique modulaire parfaitement
+définie, qui produit simplement un domaine plus petit que celui demandé.
+
+Trouvé en passant les douze options numériques à `0`, `1`, `2³²`, `2⁴⁴` et
+`UINT64_MAX`, soit soixante combinaisons comparées à π(10⁹) : `-c` était la
+seule touchée. Le détail est dans `BUG.md`, entrée B7. Trois contrôles ajoutés
+à `check.sh`, la suite passe de 124 à 127.
+
+Au même moment, le texte de `-K` cessait de renvoyer à `roue11`, programme
+absent de ce dépôt : il décrit désormais ce que fait le programme quand l'étage
+est éteint.
+
+---
+
 ## 2026-08-28 — B6 · Débordement de l'anneau de seaux à l'activation
 
 `./roue12 1e11 -s 2048 -J 4 -v` plantait par `SIGSEGV`. ASan pointe une
