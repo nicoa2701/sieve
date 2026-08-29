@@ -49,6 +49,23 @@
 
 #define CHUNKS_PER_THREAD 8
 
+/*
+ * Amortissement de la repose des seaux. Un chunk peut demarrer n'importe ou,
+ * donc il replace TOUS les premiers a seau avant de cribler : ce cout est par
+ * chunk, pas par segment, et un chunk trop court le paie plein. On exige donc
+ * qu'un chunk couvre au moins BUCKET_AMORT candidats par entree reposee.
+ *
+ * Le rapport est mesure, pas derive : a [10^15, +10^10], 1 587 772 premiers a
+ * seau et 16 777 216 candidats par segment, l'optimum est a 4 segments par
+ * chunk, soit 42 candidats par entree. En dessous de 10^14 la contrainte est
+ * vide, faute de premiers a seau.
+ *
+ * MIN_CHUNKS_PER_THREAD borne l'effet : agrandir les chunks au point de
+ * laisser des threads sans travail coute plus que la repose economisee.
+ */
+#define BUCKET_AMORT 40
+#define MIN_CHUNKS_PER_THREAD 2
+
 #define BLOCK_MIN_TURNS 1
 
 
@@ -2462,7 +2479,12 @@ static void usage(FILE *out, const char *prog)
             "          logiques)\n"
             "  -c SEG  segments par chunk, l'unite que les threads se "
             "volent\n"
-            "          (defaut : de quoi faire %d chunks par thread)\n"
+            "          (defaut : de quoi faire %d chunks par thread, "
+            "elargi quand les\n"
+            "          premiers a seau sont assez nombreux pour que leur "
+            "repose a chaque\n"
+            "          chunk pese, sans descendre sous %d chunks par "
+            "thread)\n"
             "  -p PMAX borne du pre-crible (defaut : %d, 0 pour "
             "desactiver ; en dessous de 7\n"
             "          la marche 210 devient illicite et les seaux "
@@ -2480,6 +2502,7 @@ static void usage(FILE *out, const char *prog)
             "  -h      cette aide ; --help aussi\n",
             prog,
             CHUNKS_PER_THREAD,
+            MIN_CHUNKS_PER_THREAD,
             PRESIEVE_DEFAULT_MAX,
             PREFETCH_DEFAUT);
 }
@@ -3299,6 +3322,8 @@ int main(int argc, char **argv)
 
     size_t class_mid4[8];
 
+    uint64_t bucket_primes = 0;
+
     for (unsigned rc = 0; rc < 8; rc++)
     {
         size_t i = class_mid3[rc];
@@ -3310,6 +3335,8 @@ int main(int argc, char **argv)
             i = class_start[rc + 1];
 
         class_mid4[rc] = i;
+
+        bucket_primes += class_start[rc + 1] - i;
     }
 
     size_t tbase[8];
@@ -3406,6 +3433,31 @@ int main(int argc, char **argv)
 
         if (chunk_segments == 0)
             chunk_segments = 1;
+
+        /* Sans premier a seau il n'y a rien a reposer : le decoupage ne
+           bouge pas. La contrainte ne mord donc que sur les intervalles
+           etroits a borne haute, ou la repose domine le criblage. */
+        if (bucket_primes)
+        {
+            uint64_t need =
+                (bucket_primes * BUCKET_AMORT + segment_bits - 1)
+                / segment_bits;
+
+            uint64_t floor_target =
+                (uint64_t)threads * MIN_CHUNKS_PER_THREAD;
+
+            uint64_t cap =
+                (total_segments + floor_target - 1) / floor_target;
+
+            if (cap == 0)
+                cap = 1;
+
+            if (need > cap)
+                need = cap;
+
+            if (need > chunk_segments)
+                chunk_segments = need;
+        }
     }
 
     uint64_t chunk_count =
@@ -3767,10 +3819,11 @@ int main(int argc, char **argv)
     if (bucket_bytes)
     {
         printf("Seaux: fenetre %llu KiB, %llu anneau(x), p > %u, "
-               "marche roue 210\n",
+               "%llu premier(s), marche roue 210\n",
                (unsigned long long)(bucket_bytes / 1024),
                (unsigned long long)ring_slots,
-               p_bucket);
+               p_bucket,
+               (unsigned long long)bucket_primes);
     }
     else
     {
