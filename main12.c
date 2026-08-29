@@ -114,57 +114,182 @@ static uint64_t count_set_bits(const uint8_t *bits,
 }
 
 
+/*
+ * Premiers de base jusqu'a `limit`, impairs seuls et par segments.
+ * L'ancien Eratosthene tenait un octet par entier : a racine(10^15) il
+ * parcourait 31 Mo en acces disperses, soit un cout fixe de 373 ms que les
+ * intervalles etroits payaient plein tarif. Ici la fenetre active tient en
+ * cache et seuls les impairs sont representes.
+ */
+#define BASE_SEGMENT_BYTES (32 * 1024)
+
 static uint32_t *generate_base_primes(uint64_t limit,
-                                       size_t *count)
+                                      size_t *count)
 {
-    uint8_t *composite = calloc(limit + 1, 1);
+    size_t cap = 1024;
+    size_t n   = 0;
 
-    if (!composite)
-    {
-        fprintf(stderr, "allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    for (uint64_t p = 2; p * p <= limit; p++)
-    {
-        if (!composite[p])
-        {
-            for (uint64_t x = p * p;
-                 x <= limit;
-                 x += p)
-            {
-                composite[x] = 1;
-            }
-        }
-    }
-
-    size_t n = 0;
-
-    for (uint64_t i = 2; i <= limit; i++)
-    {
-        if (!composite[i])
-            n++;
-    }
-
-    uint32_t *primes =
-        malloc((n ? n : 1) * sizeof(uint32_t));
+    uint32_t *primes = malloc(cap * sizeof *primes);
 
     if (!primes)
     {
         fprintf(stderr, "allocation failed\n");
-        free(composite);
         exit(EXIT_FAILURE);
     }
 
-    size_t k = 0;
+    *count = 0;
 
-    for (uint64_t i = 2; i <= limit; i++)
+    if (limit < 2)
+        return primes;
+
+    primes[n++] = 2;
+
+    if (limit < 3)
     {
-        if (!composite[i])
-            primes[k++] = (uint32_t)i;
+        *count = n;
+
+        return primes;
     }
 
-    free(composite);
+    /* Amorces : premiers impairs jusqu'a racine(limit), indice i pour 2i+1. */
+    uint64_t root = (uint64_t)sqrt((double)limit);
+
+    while ((root + 1) <= limit / (root + 1))
+        root++;
+
+    while (root && root > limit / root)
+        root--;
+
+    size_t sn = (size_t)(root / 2) + 1;
+
+    uint8_t *seed = malloc(sn);
+
+    if (!seed)
+    {
+        fprintf(stderr, "allocation failed\n");
+        free(primes);
+        exit(EXIT_FAILURE);
+    }
+
+    memset(seed, 1, sn);
+
+    seed[0] = 0;
+
+    for (size_t i = 1; i < sn; i++)
+    {
+        uint64_t p = 2 * (uint64_t)i + 1;
+
+        if (!seed[i] || p * p > root)
+            continue;
+
+        for (uint64_t j = p * p / 2; j < sn; j += p)
+            seed[j] = 0;
+    }
+
+    size_t ns = 0;
+
+    for (size_t i = 1; i < sn; i++)
+    {
+        if (seed[i])
+            ns++;
+    }
+
+    /* sp[k] est l'amorce, nx[k] son prochain multiple impair a rayer. */
+    uint64_t *sp = malloc((ns ? ns : 1) * sizeof *sp);
+    uint64_t *nx = malloc((ns ? ns : 1) * sizeof *nx);
+
+    uint8_t *blk = malloc(BASE_SEGMENT_BYTES);
+
+    if (!sp || !nx || !blk)
+    {
+        fprintf(stderr, "allocation failed\n");
+        free(seed);
+        free(sp);
+        free(nx);
+        free(blk);
+        free(primes);
+        exit(EXIT_FAILURE);
+    }
+
+    ns = 0;
+
+    for (size_t i = 1; i < sn; i++)
+    {
+        if (seed[i])
+        {
+            sp[ns] = 2 * (uint64_t)i + 1;
+            nx[ns] = sp[ns] * sp[ns];
+            ns++;
+        }
+    }
+
+    free(seed);
+
+    for (uint64_t lo = 3;
+         lo <= limit;
+         lo += 2 * (uint64_t)BASE_SEGMENT_BYTES)
+    {
+        uint64_t hi = lo + 2 * (uint64_t)BASE_SEGMENT_BYTES - 2;
+
+        if (hi > limit)
+            hi = limit;
+
+        size_t cnt = (size_t)((hi - lo) / 2) + 1;
+
+        memset(blk, 1, cnt);
+
+        for (size_t k = 0; k < ns; k++)
+        {
+            uint64_t p = sp[k];
+            uint64_t m = nx[k];
+
+            if (m > hi)
+                continue;
+
+            if (m < lo)
+                m = lo + ((p - (lo % p)) % p);
+
+            /* Les paires ne sont pas representees : garder un multiple impair. */
+            if ((m & 1) == 0)
+                m += p;
+
+            for (; m <= hi; m += 2 * p)
+                blk[(m - lo) / 2] = 0;
+
+            nx[k] = m;
+        }
+
+        for (size_t i = 0; i < cnt; i++)
+        {
+            if (!blk[i])
+                continue;
+
+            if (n == cap)
+            {
+                cap *= 2;
+
+                uint32_t *grown = realloc(primes, cap * sizeof *primes);
+
+                if (!grown)
+                {
+                    fprintf(stderr, "allocation failed\n");
+                    free(primes);
+                    free(sp);
+                    free(nx);
+                    free(blk);
+                    exit(EXIT_FAILURE);
+                }
+
+                primes = grown;
+            }
+
+            primes[n++] = (uint32_t)(lo + 2 * (uint64_t)i);
+        }
+    }
+
+    free(sp);
+    free(nx);
+    free(blk);
 
     *count = n;
 
