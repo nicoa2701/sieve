@@ -89,7 +89,8 @@ voudrait les reproduire :
 
 Les passages longs comme 10¹⁴ et 10¹⁵ sont particulièrement sensibles à la
 fréquence soutenue et au refroidissement. Le protocole complet, et la campagne
-précédente avec l'ablation de chaque étage, sont dans [`MESURES.md`](MESURES.md).
+courante avec l'ablation de chaque étage à trois bornes, sont dans
+[`MESURES.md`](MESURES.md).
 
 </details>
 

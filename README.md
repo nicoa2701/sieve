@@ -86,8 +86,8 @@ For the numbers above to mean anything, and for anyone reproducing them:
 - record CPU frequency and thermal throttling when testing very large limits.
 
 Long runs such as 10¹⁴ and 10¹⁵ are especially sensitive to sustained CPU
-frequency and cooling. The full protocol, and the previous campaign with its
-ablation of every stage, are in [`MESURES.md`](MESURES.md).
+frequency and cooling. The full protocol, and the current campaign with its
+ablation of every stage at three limits, are in [`MESURES.md`](MESURES.md).
 
 </details>
 

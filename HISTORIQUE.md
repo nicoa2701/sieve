@@ -9,6 +9,66 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-29 — C3 · Campagne de mesure sur le 9700X
+
+`MESURES.md` décrivait encore C2 : l'i5-9300HF, le commit `491cd40`,
+primesieve 12.10. Deux changements l'avaient périmée d'un coup — les deux
+paliers du jour sur `generate_base_primes`, et le passage sur Ryzen 9700X.
+Plus un seul chiffre du fichier ne décrivait le programme ni la machine.
+
+**Le point de croisement recule de deux décades.** Sur des fenêtres de 10¹⁰ :
+
+```
+  debut      roue12   primesieve   rapport    C2 (i5)
+  10^12     108,2 ms    138,0 ms    1,28x      1,10x
+  10^13     145,8 ms    168,0 ms    1,15x      0,90x
+  10^14     208,7 ms    210,0 ms    1,01x      0,82x
+  10^15     333,3 ms    272,0 ms    0,82x      0,66x
+```
+
+En C2 le programme était distancé sur quatre points sur six et perdait jusqu'à
+1,5× ; ici sur un seul, et de 18 %. Comptage complet : 1,42× à 1,49× d'avance
+de 10¹⁰ à 10¹². Ce déplacement vient du coût fixe, pas du criblage — le retard
+restant à 10¹⁵, lui, est bien dans le criblage.
+
+**Le manque déclaré de C2 est comblé.** C2 se reprochait de n'avoir pu mesurer
+ni la plaque ni les seaux, faute d'une borne où ils travaillent. L'ablation est
+donc faite à trois bornes plutôt qu'une, le choix découlant d'un seul nombre —
+le seuil des seaux, 5 242 880, qu'un premier ne franchit que si √N le dépasse :
+π(10¹⁰) où plaque et seaux sont hors service, `[10¹³, +10¹⁰]` où la plaque seule
+tourne, `[10¹⁵, +10¹⁰]` où tout tourne. À cette dernière, couper la plaque coûte
+14 % et couper les seaux 21 % : les deux étages gagnent leur place, et le chemin
+des seaux est le plus rentable des cinq.
+
+Deux choses qu'une borne unique aurait cachées :
+
+- **`-c 1` coûte 28 % à 10¹⁵ contre 1,3 % à 10¹⁰.** Le vol de travail entre
+  threads ne se paie qu'en haut, où les chunks sont chers et déséquilibrés. C2,
+  qui ne mesurait qu'à 10¹⁰, le classait comme négligeable.
+- **`-Q 0` n'est résolu à aucune des trois bornes**, y compris celle où les cinq
+  étages tournent. Une non-résolution n'est pas un zéro, mais après trois
+  tentatives dont une dans le régime le plus favorable, la campagne n'établit
+  pas l'utilité du préchargement. C'est le seul étage dans ce cas.
+
+Le témoin de dérive adopté après la campagne jetée a servi : 275, 275, 269 ms
+en fin de campagne contre 272 ms au début, soit 2,2 % sur seize minutes. La
+bande de reproductibilité est écrite avant les tables parce qu'elle décide de
+leur lecture : moins de 1 % à 10¹⁰, mais **~5 % à 10¹⁵**, c'est-à-dire là même
+où se joue la comparaison. Deux lignes d'ablation sont marquées non résolues à
+ce titre. Vérifié aussi que la référence n'est pas désavantagée : primesieve
+compilé `-march=native` donne 269 ms contre 267 ms sans, alors que `roue12` en
+profite.
+
+La validation est désormais jouée en entier sous les deux compilateurs, et non
+plus seulement déléguée à la CI : `make check` (127 contrôles), `make sanitize`
+et les trois variantes `-Werror` passent sous gcc 15.2 comme sous clang 21.1.
+
+Reste à faire : le profil à 10¹⁵. L'ablation dit ce que coûte *couper* un
+étage, pas où passent les 18 % de retard. C'est le manque de C3, et il porte,
+comme celui de C2, sur le seul régime où le programme est distancé.
+
+---
+
 ## 2026-08-29 — `ea7124b` · Amorces criblées par la roue 30 du programme
 
 Second palier sur `generate_base_primes`, après les impairs segmentés du même
