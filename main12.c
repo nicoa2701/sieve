@@ -3236,7 +3236,15 @@ int main(int argc, char **argv)
 
     if (chunk_override)
     {
-        chunk_segments = chunk_override;
+        /* Plafonne a la plage entiere : au-dela, chunk_segments *
+           segment_bits deborde et chunk_candidates retombe sous la
+           taille reelle, ne criblant qu'une partie du domaine. */
+        chunk_segments =
+            chunk_override < total_segments ? chunk_override
+                                            : total_segments;
+
+        if (chunk_segments == 0)
+            chunk_segments = 1;
     }
     else
     {

@@ -225,5 +225,13 @@ expect 21201526   17180000000 -d 5e8 -s 1024 -J 1
 expect 22484495   4300000000 -d 5e8 -s 512 -J 1
 expect 455052511  1e10 -s 1024 -J 1
 
+# B7 : -c ne doit pas faire deborder chunk_segments * segment_bits. Au dela de
+# la plage entiere, chunk_candidates retombait sous sa vraie valeur et seule
+# une partie du domaine etait criblee, sans code d'erreur. 2^44 * 2^20 = 2^64
+# annule le produit ; 2^44 + 1 le ramene a un segment.
+expect 50847534 1e9 -s 128 -c 17592186044416
+expect 50847534 1e9 -s 128 -c 17592186044417
+expect 50847534 1e9 -s 128 -c 18446744073709551615
+
 printf '\n%d reussite(s), %d echec(s)\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
