@@ -9,6 +9,77 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-30 — Bande du milieu · trois leviers fermés, et le motif d'erreur
+
+L'entrée du profil des seaux désignait un second chantier : `sweep_exact_calc`
+porte 82,8 % des défauts L3, avec un segment de 2048 KiB par thread contre
+1 MiB de L2 partagé entre deux threads SMT. Trois leviers essayés, tous mesurés,
+aucun retenu.
+
+```
+                        effet sur la cause              effet sur le temps
+  -L / -S / -s          ---                    -L perdant de +4 a +44 %,
+                                               -S plat, -s optimal au defaut
+  grandes pages         TLB L1 702 M -> 11,9 M          -0,2 %
+                        (facteur 59)
+  prechargement         defauts L3 335 M -> 311 M       +3,5 %
+  de la bande           (-7 %), +3,3 % d'instructions
+```
+
+Temps mesurés à `[10¹⁵, +10¹¹]`, meilleur de 5 entrelacé, où la bande de
+reproductibilité vaut ~1 %.
+
+**Ce que la bande fait réellement.** Compteurs exacts, en monothread pour éviter
+les atomiques : 44,9 M de visites de premier, dont **6,77 M de tours complets
+seulement**. La queue partielle porte 48,9 M des 103,7 M de marques, la boucle
+déroulée par 8 en porte 54,2 M, la tête 0,5 M. Soit **une marque par visite en
+moyenne** : avec un pas de `p` octets — au moins 512 Ko dans cette bande — la
+plupart des premiers n'ont pas la place d'un tour complet dans un segment de
+2 MiB. C'est ce qui a décidé du placement du préchargement, sur l'adresse exacte
+de la première marque du premier suivant, et non dans la boucle déroulée où
+j'allais le mettre.
+
+**Pourquoi les trois échouent, et c'est la même raison.** Les 2,93·10⁸ défauts
+L3 attribués à cette fonction coûteraient 9,2·10⁸ cycles par thread s'ils
+étaient exposés ; elle n'en consomme que 2,4·10⁸. **Ils sont donc déjà
+recouverts à un parallélisme d'environ 4**, que le déroulage par 8 fournit sans
+rien demander. Il n'y avait pas de latence à récupérer — seulement du débit que
+la machine absorbe déjà. Supprimer 59 fois les défauts de TLB ou 7 % des défauts
+L3 ne pouvait rien donner ; y ajouter de l'arithmétique d'adresse coûte
+exactement ce qu'elle pèse.
+
+**Le motif d'erreur, nommé pour la troisième fois.** J'ai désigné cette fonction
+comme « le chantier de la pression mémoire » parce qu'elle porte 82,8 % des
+défauts L3. Porter les défauts n'est pas être bloqué par eux. C'est la même
+faute que les deux précédentes, sous une forme de plus :
+
+- « ce n'est pas l'arithmétique, donc c'est la mémoire » — corrigé par le profil
+  des seaux ;
+- « ce chemin ne rate pas le cache, donc le préchargement ne sert à rien » —
+  corrigé en le retirant, ce qui a coûté 5 % ;
+- « cette fonction porte les défauts, donc elle est bloquée dessus » — corrigé
+  ici.
+
+À chaque fois une cause déduite d'un compteur au lieu d'être mesurée. Les deux
+seuls gains de la série, `bdccb6f` et `9484bbc`, ne reposaient pas sur une telle
+déduction : l'un compte des répétitions de travail, l'autre des instructions,
+tous deux déterministes.
+
+**Note de méthode.** Un premier balayage de la distance de préchargement donnait
+`BAND_PF=32` à −3,5 % sur la fenêtre de 10¹⁰. Refait contre une base fraîche, le
+même binaire donne +0,7 % : la base avait dérivé de 314,6 à 304,2 ms entre les
+deux séries. Le gain annoncé n'était qu'une dérive machine, et il aurait été
+publié sans le contrôle. Sur cette fenêtre, un binaire ne se compare qu'à une
+référence mesurée dans la même série entrelacée — jamais à un chiffre relevé
+plus tôt.
+
+**Ce que ça laisse.** Cinq résultats négatifs consécutifs après deux gains. Les
+12 % de retard restants à 10¹⁵ ne cèdent à aucun levier essayé, et le profil ne
+désigne plus de cible dont on puisse dire qu'elle est exposée plutôt que
+recouverte. La suite demanderait de changer d'algorithme, pas de réglage.
+
+---
+
 ## 2026-08-30 — Empaquetage de `bucket_entry_t` · piste nommée, tentée, fermée
 
 L'entrée ci-dessous désignait cette piste comme la suivante, et la marquait
