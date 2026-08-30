@@ -9,6 +9,63 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-30 — `9484bbc` · Réempilement fusionné, et trois variantes écartées
+
+Suite du profil ci-dessous, qui donnait la cible : le chemin des seaux est
+limité par le débit d'instructions. Le désassemblage a dit où était le gras du
+réempilement — deux relectures de `r` puis `r->cur` depuis la pile à chaque
+entrée, un spill du slot, un `jmp` de retour. La base de l'anneau est
+maintenant tenue en registre pour toute la fenêtre et le push est écrit sur
+place ; le bloc passe de **17 à 12 instructions**.
+
+```
+  instructions, [10^15, +10^10]   28,805e9 -> 28,127e9   -2,4 %
+  temps,        [10^15, +10^11]     2291 ms -> 2226 ms   -2,8 %
+```
+
+**Le point de mesure est la fenêtre de 10¹¹, et c'est le fond de l'affaire.**
+Sa bande de reproductibilité vaut ~1 % contre ~5 % sur la fenêtre de 10¹⁰, où
+le gain n'est pas résolu : trois passages y ont donné +0,9 %, −2,5 % et −8,4 %.
+Sans le point long, cette mesure aurait pu être lue comme n'importe quoi entre
+« rien » et « −8 % ». Le compte d'instructions, lui, est déterministe, et c'est
+lui qui a servi à trier les variantes avant de chronométrer.
+
+**Trois variantes écartées.** Elles valent l'entrée : chacune démolit une
+intuition que le profil semblait appuyer.
+
+- **Marche de roue empaquetée dans un mot de 64 bits.** Le corps de boucle
+  faisait quatre `movzbl` sur une structure de 8 octets ; un seul chargement
+  paraissait évident. Résultat : **+0,6 % d'instructions**. Un chargement plus
+  cinq extractions ALU en chaîne dépendante coûte plus que quatre accès L1, que
+  Zen 5 sert à trois ou quatre par cycle. Les quatre `movzbl` étaient le bon
+  choix du compilateur.
+
+- **Préchargement retiré.** L'entrée précédente concluait qu'« il n'y a rien à
+  précharger, ce chemin ne rate pas le cache ». **C'est une lecture à
+  l'envers**, et l'expérience le montre : −5,2 % d'instructions, mais +5,1 % de
+  temps et 203 M de défauts L2 qui réapparaissent. Les 209 M de remplissages
+  logiciels tombent à 78 000 quand on l'enlève. Le chemin ne rate pas le cache
+  *parce que* le préchargement le sert. Ce qui ne se résout pas, c'est la
+  distance — `-Q` de 8 à 32 — jamais le préchargement lui-même.
+
+- **Base de l'anneau passée en paramètre** à `bucket_push`, pour ne pas
+  dupliquer son corps : −1,5 % d'instructions, −0,7 % de temps, non résolu. La
+  duplication paye le tiers restant, et c'est le seul motif de l'avoir écrite ;
+  le commentaire du code le dit, sans quoi la première relecture la
+  refactorisera.
+
+`bucket_push` reste la forme employée à l'activation, où elle n'est appelée
+qu'une fois par premier et par chunk.
+
+**Ce que ça laisse.** Le budget par entrée reste d'environ 45 instructions, dont
+le préchargement (5, nécessaire), le dépaquetage de l'entrée (9), le marquage
+(11) et le réempilement (12). La piste suivante serait l'empaquetage de
+`bucket_entry_t` — `idx` sur 23 bits, `wi` sur 9, `k` sur 32 tiennent
+exactement dans 64 bits — pour supprimer la reconstruction par `vpinsrd` à
+chaque réempilement. Non tentée.
+
+---
+
 ## 2026-08-30 — Profil des seaux · 43,6 % des instructions pour 8,7 % du marquage
 
 Après `bdccb6f` il restait 12 % de retard à 10¹⁵, et le profil par ligne les
