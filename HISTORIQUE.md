@@ -9,6 +9,88 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-30 — Profil des seaux · 43,6 % des instructions pour 8,7 % du marquage
+
+Après `bdccb6f` il restait 12 % de retard à 10¹⁵, et le profil par ligne les
+plaçait dans `sweep_bucketed` (18,8 % des cycles) et `bucket_push` (10,6 %).
+Restait à savoir par quoi ces deux-là sont limités.
+
+**Correction de deux entrées ci-dessous.** L'entrée `bdccb6f` ouvre sur « le
+coût de l'activation est en trafic mémoire », et l'entrée du profil à 10¹⁵ dit
+que « la boucle d'activation attend la mémoire ». **C'est faux**, et l'erreur
+tenait à la même paresse que celle qu'elle prétendait corriger : n'ayant pas
+mesuré la mémoire, j'avais pris « ce n'est pas l'arithmétique » pour « c'est la
+mémoire ». En échantillonnant cette fois sur les compteurs de remplissage :
+
+```
+                        % cycles   % remplissages L2   % remplissages L3
+  sweep_bucketed          18,8            1,7                0,4
+  bucket_push             10,6            1,8                0,4
+  sieve_segment           12,0            0,8                1,9
+  sweep_over              24,1           70,1               12,2
+  sweep_exact_calc        22,0           14,1               82,8
+```
+
+Le chemin des seaux fait 29,4 % des cycles pour 3,5 % des défauts L2 et 0,8 %
+des défauts L3. L'activation, corrigée elle aussi, n'est pas davantage un
+problème de mémoire. Et le programme entier ne prend que 10,9 M de lignes
+depuis la DRAM contre 939 M depuis le L2 et 354 M depuis le L3 : il n'est
+limité par la DRAM nulle part.
+
+L'argument d'amortissement de `bdccb6f` tient malgré tout — il portait sur le
+*nombre de fois* que le travail d'activation est refait, ce que la nature de ce
+travail ne change pas. Seule l'étiquette « trafic mémoire » était non mesurée.
+
+**Ce qui limite vraiment ces deux fonctions : le débit d'instructions.**
+
+```
+                        % cycles   % instructions    IPC
+  bucket_push             10,6           23,2        3,46
+  sweep_bucketed          18,8           20,4        1,72
+  sweep_over              24,1           22,5        1,48
+  sweep_exact_calc        22,0           16,0        1,16
+                                     (programme entier : 1,59)
+```
+
+`bucket_push` est le code le mieux exécuté du programme. Il ne bloque sur rien :
+il exécute simplement beaucoup. À eux deux ils retirent **43,6 % de toutes les
+instructions**.
+
+**Le mécanisme, chiffré.** Une fenêtre de seau de 128 KiB couvre 3 932 160
+entiers et le seuil des seaux vaut 5 242 880 : tout premier à seau a donc un pas
+plus grand que la fenêtre. Chaque entrée raye **exactement une fois**, puis paie
+la totalité du dépilement, du calcul de position et du réempilement.
+
+```
+                     premiers      marques    instructions   par bit raye
+  balayage direct     364 165     3,07e9         41,0 %          3,85
+  seaux             1 587 762     2,93e8         43,6 %         42,9
+```
+
+Les seaux font **8,7 % du marquage pour 43,6 % des instructions**, soit 11 fois
+plus d'instructions par bit rayé que le balayage direct. C'est la comptabilité
+qui coûte, pas le marquage. Les deux sommes de 1/p sont calculées
+indépendamment du programme ; le compte de premiers à seau qui en sort,
+1 587 762, recoupe à dix près celui qu'annonce `-v`.
+
+**Deux réglages que ça met en cause.**
+
+- `-Q`, le préchargement : 322,4 / 311,7 / 317,3 ms pour 0, 8 et 32. Toujours
+  non résolu — mais **on sait enfin pourquoi**. C3 constatait le fait à ses
+  trois bornes sans pouvoir l'expliquer : il n'y a rien à précharger, ce chemin
+  ne rate pas le cache.
+- `-K`, la fenêtre : 320,9 / 317,0 / 312,4 / 308,1 / 314,0 ms de 32 à 512 KiB.
+  Tout dans la bande de 5 %. Élargir la fenêtre pour qu'une entrée raye
+  plusieurs fois — la sortie évidente au 42,9 — ne donne rien de résolu.
+
+**Ce que ça laisse.** Sur les seaux, le levier est le nombre d'instructions par
+marque : fusionner dépilement, marquage et réempilement, non pas précharger ni
+réagencer la mémoire. Et la pression mémoire du programme, elle, est un autre
+chantier : `sweep_exact_calc` porte 82,8 % des défauts L3, avec un segment de
+2048 KiB par thread contre 1 MiB de L2 partagé par deux threads SMT.
+
+---
+
 ## 2026-08-29 — `bdccb6f` · Le découpage en chunks suit le régime
 
 Suite directe du profil : le coût de l'activation est en trafic mémoire, et il
