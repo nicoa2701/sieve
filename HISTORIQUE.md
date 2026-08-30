@@ -9,6 +9,51 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-08-30 — Empaquetage de `bucket_entry_t` · piste nommée, tentée, fermée
+
+L'entrée ci-dessous désignait cette piste comme la suivante, et la marquait
+« non tentée ». Elle l'est désormais, sous deux formes, et les deux sont
+perdantes.
+
+```
+                                        instructions      temps
+  actuel  struct { uint32_t k; at; }     28,120e9        300,7 ms
+  V6      mot unique, k masque           29,215e9 +3,9 %  316,0 ms +5,1 %
+  V7      mot unique, k reconstruit      28,712e9 +2,1 %  313,9 ms +4,4 %
+```
+
+Le compte d'instructions est déterministe, le temps va dans le même sens :
+inutile d'aller chercher la bande de reproductibilité, la piste est morte.
+
+**Le mécanisme.** La forme actuelle est déjà meilleure que celle que je
+proposais. gcc tient l'entrée entière dans un registre XMM et n'en réécrit que
+la moitié `at` par un seul `vpinsrd`, suivi d'un `vmovq` pour ranger les huit
+octets. Le mot unique l'oblige à assembler à la main — `shl`, `or`, `or` — et
+en V6 s'y ajoutent un `movabs` pour matérialiser `0xffffffff00000000`, qui
+n'est pas encodable en immédiat, et un **respill de `cur`** : garder le mot
+vivant pendant la boucle de marquage coûte un registre de trop, et le gain du
+commit précédent est repayé sur place. Le bloc de réempilement remonte de 12 à
+18 instructions.
+
+**L'erreur était dans la formulation de la piste elle-même.** Elle disait :
+« `idx` sur 23 bits, `wi` sur 9, `k` sur 32 tiennent exactement dans 64 bits ».
+C'est un argument de *place* — or la structure occupait déjà exactement 64
+bits. Il n'y avait aucune place à gagner. L'empaquetage ne changeait que la
+manière d'accéder aux champs, et il remplaçait une insertion de voie 32 bits
+par de l'arithmétique 64 bits. La contrainte invoquée pour justifier la piste
+était déjà satisfaite avant de commencer.
+
+**Le motif se répète.** Troisième tentative de suite où « moins d'instructions
+apparentes dans le C » produit plus d'instructions machine : la marche de roue
+en un mot, le préchargement retiré, et maintenant l'entrée empaquetée. À chaque
+fois gcc avait déjà choisi la forme économique — quatre `movzbl` servis à
+trois par cycle, un préchargement qui convertit 209 M de défauts, une
+insertion de voie — et la réécriture manuelle lui retirait cette liberté. Le
+seul gain retenu sur ce chemin, `9484bbc`, ne va pas contre le compilateur : il
+lui rend un registre.
+
+---
+
 ## 2026-08-30 — `9484bbc` · Réempilement fusionné, et trois variantes écartées
 
 Suite du profil ci-dessous, qui donnait la cible : le chemin des seaux est
