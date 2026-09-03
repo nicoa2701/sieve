@@ -9,6 +9,38 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-03 — `05ef809` · Le compilateur suit ce qui est installe
+
+Le défaut était `cc`, donc le gcc du système, dont la version change d'une
+machine à l'autre. `make` retient désormais le premier de `CC_PREFERRED` —
+`gcc-15` puis `gcc-13` — qui soit installé, et retombe sur `cc` si aucun ne
+l'est : pas d'échec de compilation sur une machine qui n'a ni l'un ni l'autre.
+
+**Le point délicat n'était pas la détection mais ce qu'elle ne doit pas
+casser.** La CI passe `make CC=gcc` et `make CC=clang`, et `check` comme
+`sanitize` héritent de `$(CC)`. Le test porte donc sur `$(origin CC)`, qui
+sépare `default` — make n'a rien reçu — de `command line` et `environment`. Le
+`CC ?= cc` d'origine a dû être retiré : il faisait passer l'origine à `file` et
+aurait neutralisé la détection sans rien signaler.
+
+```
+  make                                 -> gcc-15
+  make CC=clang                        -> clang
+  CC=gcc make                          -> gcc
+  make CC_PREFERRED=gcc-13   (absent)  -> cc, repli
+  make CC_PREFERRED="gcc-99 gcc-14"    -> gcc-14, second de la liste
+```
+
+Les deux dernières lignes exercent les branches que cette machine ne permet pas
+d'atteindre autrement, gcc-13 n'y étant pas installé : le repli et le second
+choix sont vérifiés, `gcc-13` lui-même ne l'est pas.
+
+Le témoin `.build-flags` posé le 2026-08-28 porte déjà `$(CC)`, donc le
+changement de compilateur recompile sans rien avoir à ajouter — vérifié dans les
+deux sens. `make check` 127/127 et `make sanitize` sans trouvaille avec le
+nouveau défaut, qui est ici le même compilateur qu'avant : `cc` pointait déjà
+sur gcc 15.2.0. Aucune campagne n'est donc périmée.
+
 ## 2026-09-03 — `e0ae5c1` · Le nombre de threads suit le travail
 
 Suite directe de l'entrée ci-dessous, qui avait mesuré le coût sans le
