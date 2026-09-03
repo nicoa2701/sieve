@@ -56,23 +56,34 @@ make sanitize           # ASan + UBSan, both SINK_TAIL variants
 
 | | |
 |:--|:--|
-| **Commit** | [`e29ec95`](../../commit/e29ec95) |
-| **Date** | 2026-08-29, 13:24 |
+| **Commit** | [`5dbf4d5`](../../commit/5dbf4d5) |
+| **Date** | 2026-09-03, 15:35 → 16:04 (UTC) |
 | **CPU** | AMD Ryzen 7 9700X — 8 cores / 16 threads |
 | **Threads used** | 16 |
 
 
 | Limit | π(N) | Time | Growth / decade |
 |:--|--:|--:|--:|
-| 10¹¹ | 4,118,054,813 | 0.722 s | — |
-| 10¹² | 37,607,912,018 | 8.961 s | ×12.41 |
-| 10¹³ | 346,065,536,839 | 115.7 s | ×12.91 |
-| 10¹⁴ | 3,204,941,750,802 | 1,546.3 s | ×13.36 |
-| 10¹⁵ | 29,844,570,422,669 | 19,446.3 s | ×12.58 |
+| 10¹¹ | 4,118,054,813 | 0.715 s | — |
+| 10¹² | 37,607,912,018 | 9.120 s | ×12.76 |
+| 10¹³ | 346,065,536,839 | 116.1 s | ×12.73 |
+| 10¹⁴ | 3,204,941,750,802 | 1,525.4 s | ×13.14 |
+| 10¹⁵ † | 29,844,570,422,669 | 19,446.3 s | ×12.58 |
 
-The growth factor stays between **×12.4 and ×13.4 per decade** across the whole
-measured range: a stable overhead above the ×10 of the range itself, with no
+† **10¹⁵ was not re-measured** — 5.4 h of bench time. The row keeps its
+original provenance, [`e29ec95`](../../commit/e29ec95) on 2026-08-29, and its
+growth factor is relative to that series' own 10¹⁴ (1,546.3 s), not to the one
+in the table.
+
+The growth factor stays between **×12.7 and ×13.1 per decade** across the four
+re-measured limits: a stable overhead above the ×10 of the range itself, with no
 cliff as the working set outgrows each successive cache level.
+
+The four limits land at −1.0%, +1.8%, +0.4% and −1.4% of the `e29ec95` figures,
+with no consistent sign: nothing distinguishable from noise. The two sieving
+changes between the two commits — `bdccb6f` and `9484bbc`, worth 6.6% on a
+narrow window at 10¹⁵ — therefore do not show up on a full count, which is
+dominated by the low end of the interval where the bucket regime barely exists.
 
 All five counts reproduce the known values of the prime-counting function π(N).
 
@@ -92,6 +103,11 @@ For the numbers above to mean anything, and for anyone reproducing them:
 Long runs such as 10¹⁴ and 10¹⁵ are especially sensitive to sustained CPU
 frequency and cooling. The full protocol, and the current campaign with its
 ablation of every stage at three limits, are in [`MESURES.md`](MESURES.md).
+
+The table above is a single pass per limit, run back to back with no cooldown —
+which a 116 s or 1,525 s measurement tolerates far better than a few-hundred-
+millisecond one, where the campaign records up to 10% spread between
+independent series.
 
 </details>
 

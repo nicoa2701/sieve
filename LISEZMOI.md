@@ -58,23 +58,35 @@ make sanitize           # ASan + UBSan, les deux variantes SINK_TAIL
 
 | | |
 |:--|:--|
-| **Commit** | [`e29ec95`](../../commit/e29ec95) |
-| **Date** | 2026-08-29, 13:24 |
+| **Commit** | [`5dbf4d5`](../../commit/5dbf4d5) |
+| **Date** | 2026-09-03, 15:35 → 16:04 (UTC) |
 | **CPU** | AMD Ryzen 7 9700X — 8 cœurs / 16 threads |
 | **Threads utilisés** | 16 |
 
 
 | Borne | π(N) | Temps | Croissance / décade |
 |:--|--:|--:|--:|
-| 10¹¹ | 4 118 054 813 | 0,722 s | — |
-| 10¹² | 37 607 912 018 | 8,961 s | ×12,41 |
-| 10¹³ | 346 065 536 839 | 115,7 s | ×12,91 |
-| 10¹⁴ | 3 204 941 750 802 | 1 546,3 s | ×13,36 |
-| 10¹⁵ | 29 844 570 422 669 | 19 446,3 s | ×12,58 |
+| 10¹¹ | 4 118 054 813 | 0,715 s | — |
+| 10¹² | 37 607 912 018 | 9,120 s | ×12,76 |
+| 10¹³ | 346 065 536 839 | 116,1 s | ×12,73 |
+| 10¹⁴ | 3 204 941 750 802 | 1 525,4 s | ×13,14 |
+| 10¹⁵ † | 29 844 570 422 669 | 19 446,3 s | ×12,58 |
 
-Le facteur de croissance reste entre **×12,4 et ×13,4 par décade** sur toute la
-plage mesurée : un surcoût stable au-dessus du ×10 de la plage elle-même, sans
-décrochage quand la fenêtre de travail déborde chaque niveau de cache.
+† **10¹⁵ n'a pas été remesuré** — 5,4 h de banc. La ligne garde sa provenance
+d'origine, [`e29ec95`](../../commit/e29ec95) le 2026-08-29, et sa croissance se
+rapporte au 10¹⁴ de cette série-là (1 546,3 s), non à celui du tableau.
+
+Le facteur de croissance reste entre **×12,7 et ×13,1 par décade** sur les
+quatre bornes remesurées : un surcoût stable au-dessus du ×10 de la plage
+elle-même, sans décrochage quand la fenêtre de travail déborde chaque niveau de
+cache.
+
+Les quatre bornes tombent à −1,0 %, +1,8 %, +0,4 % et −1,4 % des valeurs de
+`e29ec95`, sans signe constant : rien de distinguable du bruit. Les deux
+changements du criblage entre les deux commits — `bdccb6f` et `9484bbc`, qui
+valent 6,6 % sur une fenêtre étroite à 10¹⁵ — ne se voient donc pas sur un
+comptage complet, dominé par le bas de l'intervalle où le régime des seaux
+existe à peine.
 
 Les cinq comptages reproduisent les valeurs connues de la fonction de compte
 des premiers π(N).
@@ -97,6 +109,11 @@ Les passages longs comme 10¹⁴ et 10¹⁵ sont particulièrement sensibles à 
 fréquence soutenue et au refroidissement. Le protocole complet, et la campagne
 courante avec l'ablation de chaque étage à trois bornes, sont dans
 [`MESURES.md`](MESURES.md).
+
+Le tableau ci-dessus est un passage unique par borne, enchaînés sans
+refroidissement — ce qu'une mesure de 116 s ou de 1 525 s tolère bien mieux
+qu'une mesure de quelques centaines de millisecondes, où la campagne relève
+jusqu'à 10 % d'écart entre séries indépendantes.
 
 </details>
 
