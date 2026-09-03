@@ -9,13 +9,13 @@ mesure dans `MESURES.md`.
 
 | | Défaut | État | Correctif | Non-régression |
 |---|---|---|---|---|
-| B1 | SIGFPE sur `HAUT = 0` | corrigé | `2124de7` | `make check` |
-| B2 | `malloc(0)` traité comme un échec | corrigé | `2124de7` | `make check`, par interposition |
-| B3 | Messages de borne trompeurs | corrigé | `2124de7` | `make check` |
-| B4 | Débordement de `bucket_entry_t.at` | corrigé | `bdce01b` | `make check` |
-| B5 | Courses de données sur les drapeaux d'allocation | corrigé | `1a4180e` | **aucune** |
-| B6 | Débordement de l'anneau de seaux à l'activation | corrigé | `e29ec95` | `make check` |
-| B7 | Débordement de `chunk_segments * segment_bits` sur `-c` | corrigé | non commité | `make check` |
+| B1 | SIGFPE sur `HAUT = 0` | corrigé | `8d22a75` | `make check` |
+| B2 | `malloc(0)` traité comme un échec | corrigé | `8d22a75` | `make check`, par interposition |
+| B3 | Messages de borne trompeurs | corrigé | `8d22a75` | `make check` |
+| B4 | Débordement de `bucket_entry_t.at` | corrigé | `e003607` | `make check` |
+| B5 | Courses de données sur les drapeaux d'allocation | corrigé | `4e9bc8b` | **aucune** |
+| B6 | Débordement de l'anneau de seaux à l'activation | corrigé | `2619843` | `make check` |
+| B7 | Débordement de `chunk_segments * segment_bits` sur `-c` | corrigé | `388f010` | `make check` |
 
 `make check` a été validé par réinjection : chacun des cinq défauts testés
 remis dans le code fait échouer la suite, et B1 en fait tomber cinq contrôles à
@@ -25,7 +25,7 @@ lui seul. B5 reste sans garde-fou, pour la raison exposée dans son entrée.
 
 ## B1 — SIGFPE sur `HAUT = 0`
 
-**État** : corrigé · commit `2124de7` · 2026-08-23 12:25:54
+**État** : corrigé · commit `8d22a75` · 2026-08-23 12:25:54
 
 **Symptôme.** `./roue12 0` et `./roue12 0 0` terminaient par
 `Floating point exception (core dumped)`, code retour 136.
@@ -67,7 +67,7 @@ code retour 0. `-v` montre tous les étages éteints et `Chunks: 0`.
 
 ## B2 — `malloc(0)` traité comme un échec
 
-**État** : corrigé · commit `2124de7` · 2026-08-23 12:25:54
+**État** : corrigé · commit `8d22a75` · 2026-08-23 12:25:54
 
 **Symptôme.** Sur une libc où `malloc(0)` renvoie `NULL` — comportement
 conforme au standard — `./roue12 0` sortait `allocation failed` avec le code
@@ -102,7 +102,7 @@ retour 0, et `1e9` reste correct sous le même preload.
 
 ## B3 — Messages de borne trompeurs
 
-**État** : corrigé · commit `2124de7` · 2026-08-23 12:25:54
+**État** : corrigé · commit `8d22a75` · 2026-08-23 12:25:54
 
 **Symptôme.** `./roue12 1e16 -d 1e10` répondait
 `Maximum limit is 1.00e+16`, alors que `./roue12 1e16` seul est accepté. Le
@@ -134,7 +134,7 @@ inchangées : `1e16 -d 0` et `[10¹⁶−1, 10¹⁶]` passent toujours.
 
 ## B4 — Débordement de `bucket_entry_t.at`
 
-**État** : corrigé · commit `bdce01b` · 2026-08-23 12:51:39
+**État** : corrigé · commit `e003607` · 2026-08-23 12:51:39
 
 **Sévérité.** Le seul des cinq à produire un **résultat faux** sans rien
 signaler.
@@ -186,8 +186,8 @@ commenter, pas par un test — les 60 intervalles de validation tournaient tous
 en configuration par défaut, hors d'atteinte du défaut.
 
 **Vérification.** Intervalle `[9999999000000000, +10⁹]`, dont primesieve 12.10
-donne 27 147 369. Avant : commit `4c643b7` · 2026-08-23 12:48 · i5-9300HF.
-Après : commit `bdce01b` · 2026-08-23 12:51:49 · i5-9300HF.
+donne 27 147 369. Avant : commit `aafcd51` · 2026-08-23 12:48 · i5-9300HF.
+Après : commit `e003607` · 2026-08-23 12:51:39 · i5-9300HF.
 
 | Réglage | Avant | Après |
 |---|---|---|
@@ -205,7 +205,7 @@ Le seuil tombait exactement sur 2²³ octets, comme l'empaquetage le prédit.
 
 ## B5 — Courses de données sur les drapeaux d'allocation
 
-**État** : corrigé · commit `1a4180e` · 2026-08-23
+**État** : corrigé · commit `4e9bc8b` · 2026-08-23
 
 **Symptôme.** Aucun observé. Formellement, comportement indéfini au sens du
 modèle mémoire C.
@@ -260,7 +260,7 @@ simples : la barrière implicite de fin de région les ordonne déjà.
 
 **Coût.** L'unique ajout au chemin chaud est une lecture atomique par chunk,
 soit quelques dizaines par exécution. Mesuré à 10⁹, meilleur de neuf, commit
-`1a4180e` · 2026-08-23 12:59 · i5-9300HF : 23,4 ms après contre 23,6 ms avant.
+`4e9bc8b` · 2026-08-23 12:59 · i5-9300HF : 23,4 ms après contre 23,6 ms avant.
 Les écritures atomiques ne sont atteintes qu'en cas d'échec d'allocation.
 
 **Limite de la vérification.** Le correctif est vérifié par inspection — les
@@ -277,7 +277,7 @@ ThreadSanitizer lui-même, incompatible avec `LD_PRELOAD`. La course reste donc
 
 ## B6 — Débordement de l'anneau de seaux à l'activation
 
-**État** : corrigé · non commité · 2026-08-28
+**État** : corrigé · commit `2619843` · 2026-08-28 21:20:19
 
 **Sévérité.** Écriture hors bornes du tas, donc corruption ; en pratique
 `SIGSEGV` immédiat sur les configurations essayées.
@@ -412,7 +412,7 @@ Les trois plantent la version d'avant correctif.
 
 ## B7 — Débordement de `chunk_segments * segment_bits` sur `-c`
 
-**État** : corrigé · non commité · 2026-08-29
+**État** : corrigé · commit `388f010` · 2026-08-29 14:26:07
 
 **Sévérité.** Compte faux, silencieux, avec code de retour 0. C'est le seul
 défaut recensé ici qui rende un résultat erroné sans le signaler.
