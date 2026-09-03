@@ -2314,9 +2314,9 @@ static uint64_t default_block_bytes(int threads)
  * travail disponible est divise par la part minimale d'un thread ; en dessous
  * d'une part, un seul thread. Ne s'applique qu'au choix automatique.
  */
-static int GetNumThreads(int max_threads,
-                         uint64_t span,
-                         uint64_t root)
+static int default_thread_count(int max_threads,
+                                uint64_t span,
+                                uint64_t root)
 {
     uint64_t share = root / THREAD_SPAN_ROOT_DIV;
 
@@ -3044,7 +3044,9 @@ int main(int argc, char **argv)
     if (want_threads <= 0)
     {
         int useful =
-            GetNumThreads(max_threads, limit - low_limit + 1, root);
+            default_thread_count(max_threads,
+                                 limit - low_limit + 1,
+                                 root);
 
         if (useful < threads)
         {
