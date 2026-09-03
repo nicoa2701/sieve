@@ -21,7 +21,9 @@ commit tant que la structure du crible ne bouge pas. Le revérifier coûte 12 h.
 
 ## Provenance
 
-Tous les chiffres de ce fichier viennent de cette série. Aucun autre.
+Tous les chiffres de ce fichier viennent de cette série, à une exception
+près : le balayage du pré-crible, dans « Pistes fermées », est postérieur et
+porte ses propres références sur place.
 
 | | |
 |---|---|
@@ -329,6 +331,48 @@ cycles montent ×3,69 pour un temps ×2,89, parce que les cœurs bloqués sur la
 mémoire consomment moins et montent en fréquence — 5,21 GHz contre 4,13 GHz. Le
 compteur de cycles surestime le ralentissement dès qu'on compare deux points à
 intensité mémoire très différente.
+
+**Le balayage du pré-crible ne se transporte pas non plus, et plus
+violemment.** Commit `781f4c9` — `main12.c` inchangé depuis `9484bbc` ·
+2026-09-03 · Ryzen 9700X. À 10⁶ les mesures sont prises à `-t 1`, où la
+dispersion vaut 1,1 % contre 9,3 % au défaut — à cette borne il n'y a qu'un
+chunk et les quinze autres threads ne font qu'allouer puis attendre.
+
+`-p` accepte 0 à 1000, mais un budget de 8 MiB de tables le plafonne à **232**,
+soit 47 valeurs premières utiles. Le coût y varie d'un **facteur 38**.
+
+```
+   -p   tables  passes     KiB    total   fixe(-d 1)  criblage    (1e6, -t 1)
+  off       -       -        -   100 us     51 us      49 us
+   37       4       1        3    85         56         29
+   59       8       2        3    65         44         21     <- optimum
+   97       8       2      220   173        154         19
+  101      12       3       17    66         49         17
+  113      12       3       67    85         67         18     <- defaut
+  137      16       4       35    70         52         18
+  199      16       4     2347   850        844          6
+  229      16       4     7919  2466       2288        178
+```
+
+Un sciage, pas une courbe : le coût s'effondre à chaque cran du nombre de
+tables fusionnées — 4→8 à 59, 8→12 à 101, 12→16 à 137 — puis remonte à
+l'intérieur du palier, la période d'un groupe étant le produit de ses premiers.
+
+**La décomposition dit que le réglage fait bien son travail.** Le temps de
+criblage seul décroît de façon monotone avec `-p` : 49 µs sans pré-crible, 21 à
+59, 18 au défaut, 16 au-delà. C'est la construction des tables qui explose, de
+51 à 2 288 µs, et à 10⁶ elle est amortie sur **un seul segment** — contre 640 à
+10¹⁰, soit 128 chunks de 5.
+
+**D'où l'inversion.** L'optimum de 10⁶ est `-p 59`, 24 % devant le défaut. À
+10¹⁰ il n'existe plus : A/B entrelacé sur 15 passages alternés, `-p 113` donne
+56,96 ms et `-p 137` 56,87 — 0,16 % d'écart pour une bande de reproductibilité
+de 1,2 %, mesurée sur quatre séries indépendantes (57,02 à 57,68 ms). Non
+résolu : **le défaut est optimal là où il compte**, et l'optimum de 10⁶ y coûte
++4 %.
+
+Ne pas régler `-p` sur une borne basse. Les 20 µs qui séparent 59 de 113 à 10⁶
+sont sans conséquence, et le réglage qui les gagne est perdant partout ailleurs.
 
 **Chasser les défauts L2.** roue12 en porte structurellement plus que primesieve,
 avec un meilleur CPI. Ils sont recouverts par le désordonné. Porter les défauts
