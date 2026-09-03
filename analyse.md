@@ -335,8 +335,10 @@ intensité mémoire très différente.
 **Le balayage du pré-crible ne se transporte pas non plus, et plus
 violemment.** Commit `781f4c9` — `main12.c` inchangé depuis `9484bbc` ·
 2026-09-03 · Ryzen 9700X. À 10⁶ les mesures sont prises à `-t 1`, où la
-dispersion vaut 1,1 % contre 9,3 % au défaut — à cette borne il n'y a qu'un
-chunk et les quinze autres threads ne font qu'allouer puis attendre.
+dispersion vaut 1,1 % contre 9,3 % au défaut de l'époque — à cette borne il n'y
+a qu'un chunk et les quinze autres threads ne faisaient qu'allouer puis
+attendre. Depuis `e0ae5c1` le défaut choisit lui-même un thread à cette borne :
+les deux mesures coïncident désormais, et le balayage reste valable tel quel.
 
 `-p` accepte 0 à 1000, mais un budget de 8 MiB de tables le plafonne à **232**,
 soit 47 valeurs premières utiles. Le coût y varie d'un **facteur 38**.
