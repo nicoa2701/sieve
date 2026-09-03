@@ -9,6 +9,59 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-03 — `ebc0de9` · Comptage complet remesuré à jour du commit
+
+Le tableau des cinq bornes de la vitrine datait de `e29ec95`, donc d'avant les
+deux changements du criblage de la session suivante — `bdccb6f`, qui élargit le
+découpage en chunks, et `9484bbc`, qui fusionne le réempilement. Quatre bornes
+remesurées à `5dbf4d5`, un passage chacune, de 15:35:22 à 16:03:31 UTC sur le
+Ryzen 9700X :
+
+```
+  1e11       4 118 054 813      714,8 ms   segment 1024 KiB
+  1e12      37 607 912 018       9,120 s   segment 2048 KiB
+  1e13     346 065 536 839     116,118 s   segment 2048 KiB
+  1e14   3 204 941 750 802   1 525,400 s   segment 2048 KiB
+```
+
+**Les quatre comptages sont ceux de π(N), et les quatre temps sont ceux
+d'avant** : −1,0 %, +1,8 %, +0,4 % et −1,4 % des valeurs de `e29ec95`, sans
+signe constant. Le point à 10¹¹ le dit plus nettement encore en croisant C4,
+mesurée sur un troisième commit : 714,8 ms ici contre 714,4 en campagne, soit
+0,06 % d'écart entre deux séries indépendantes séparées par un changement de
+code.
+
+**Ce que cela dit des deux changements.** C4 leur attribue 6,6 % sur une fenêtre
+étroite à 10¹⁵ ; ils ne se voient pas du tout sur un comptage complet, et c'est
+cohérent plutôt que contradictoire. Un comptage depuis 2 est dominé par le bas
+de son intervalle, où √N reste sous le seuil des seaux — 5 242 880, atteint
+seulement au-delà de 2,7·10¹³ — donc où le régime que ces deux changements
+servent existe à peine. Le corollaire pratique tient pour les prochains
+changements du régime des seaux : les juger sur `π(10¹⁴)` reviendrait à les
+mesurer là où ils n'agissent pas.
+
+**`e0ae5c1` est inerte ici, comme prévu.** Les quatre passages annoncent
+16 threads : le travail disponible dépasse la part minimale d'un thread dès
+2·10⁷ entiers, très loin sous 10¹¹.
+
+Deux limites à cette mesure, qui la tiennent hors de `MESURES.md` :
+
+- **un passage unique par borne, enchaînés sans refroidissement**, là où le
+  protocole de campagne exige le meilleur de trois et un repos de 10 × la durée
+  mesurée. Acceptable à cette échelle — la bande de 10 % relevée en C4 entre
+  séries indépendantes portait sur des mesures de 300 ms — mais ce n'est pas le
+  protocole ;
+- **aucune référence primesieve entrelacée**, donc aucun rapport de vitesse à
+  tirer de ces quatre chiffres.
+
+C4 reste donc en place telle quelle, y compris son « ce que cette campagne ne
+mesure pas », qui écarte le comptage complet au-delà de 10¹² pour le temps de
+banc. Cette entrée le renseigne à titre de vitrine, pas de campagne.
+
+10¹⁵ n'a pas été remesuré : 5,4 h de banc. La ligne garde sa provenance
+`e29ec95` dans le tableau, marquée comme telle, et sa croissance par décade s'y
+rapporte au 10¹⁴ de sa propre série.
+
 ## 2026-09-03 — `05ef809` · Le compilateur suit ce qui est installe
 
 Le défaut était `cc`, donc le gcc du système, dont la version change d'une
