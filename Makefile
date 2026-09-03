@@ -1,4 +1,16 @@
-CC      ?= cc
+# Compilateur : le premier de CC_PREFERRED qui est installe, sinon le cc du
+# systeme. Un CC explicite — ligne de commande ou environnement — est toujours
+# honore et court-circuite la detection ; la CI en depend pour sa matrice
+# gcc x clang, et check.sh comme sanitize en heritent.
+CC_PREFERRED ?= gcc-15 gcc-13
+
+CC_FOUND := $(shell for c in $(CC_PREFERRED); do \
+                command -v $$c >/dev/null 2>&1 && { echo $$c; break; }; \
+            done)
+
+ifeq ($(filter-out default undefined,$(origin CC)),)
+CC := $(if $(CC_FOUND),$(CC_FOUND),cc)
+endif
 CFLAGS  ?= -O3 -g -Wall -Wextra
 ARCH    ?= -march=native
 
