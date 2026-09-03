@@ -9,6 +9,69 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-03 — À 10⁶ : ce qu'une borne basse mesure · `-p` fermé, deux défauts de documentation
+
+Parti d'un simple `./roue12 1e6`. Aucun changement de code ; deux fichiers de
+documentation corrigés et une piste fermée écrite dans `analyse.md`.
+
+**Ce qu'est 10⁶ pour ce programme.** `-v` le dit d'un coup : `L2 chunk: off`,
+`L2 slab: off`, `Seaux: off`, et `Chunks: 1 of 1 segment(s)`. Quatre étages sur
+cinq éteints, 138 premiers bloqués sous `p <= 997`. La soustraction par `-d 1`
+donne le reste : 85 µs de coût fixe sur 109, soit **24 µs de criblage réel**.
+Ce n'est pas un banc de crible, c'est un banc de coût fixe — et il y est bon,
+min et médiane à 6 % sur 101 passages.
+
+**Le balayage `-t` n'y mesure pas une accélération.** Avec un seul chunk, les
+quinze autres threads allouent 512 KiB chacun puis attendent à la barrière :
+109 µs à `-t 1` contre 512 au défaut, IPC de 1,91 tombé à 0,193. Le croisement
+est entre 3·10⁷ et 10⁸, et la colonne des chunks en donne toute la cause.
+
+```
+  borne      -t 1     -t 16   rapport   chunks
+  1e6      0,109 ms  0,542 ms   0,20     1
+  1e7      0,365     1,479      0,25     1
+  3e7      0,987     1,258      0,78     2
+  1e8      2,982     2,336      1,28     7
+  1e9     33,30      4,632      7,19    64
+```
+
+Au-delà l'accélération rejoint les 8,03× que C4 mesure à 10¹⁰. C'est réel et
+sans portée : le défaut coûte 0,4 ms, personne ne crible à 10⁶ pour la vitesse.
+
+**`perf` est le mauvais instrument à cette borne.** Le processus entier pèse
+547 µs quand le chronomètre interne en annonce 109 : 47 % des instructions et
+60 % des cycles sont `exec`, `ld.so` et l'init libgomp, tous hors chronomètre.
+Et le jeu de huit événements du protocole rend `<not counted>` sur les
+instructions, à 0,00 % d'activation — le compteur n'est jamais programmé sur un
+passage aussi court. Il faut des groupes de quatre et `-r 200` pour obtenir
+100 %. À retenir avant de profiler quoi que ce soit sous la milliseconde.
+
+**Le balayage de `-p`, et pourquoi il est fermé.** C'est le seul réglage que
+10⁶ peut légitimement juger, le pré-crible étant du coût fixe. Le coût y varie
+d'un **facteur 38** sur les 47 valeurs acceptées, en sciage : un effondrement à
+chaque cran du nombre de tables fusionnées, une remontée dans chaque palier.
+L'optimum à 10⁶ est `-p 59`, 24 % devant le défaut 113.
+
+Il ne se transporte pas. À 10¹⁰, A/B entrelacé sur 15 passages alternés,
+`-p 113` et `-p 137` sont séparés de 0,16 % pour une bande de 1,2 % mesurée sur
+quatre séries indépendantes : non résolu, le défaut est optimal là où il compte,
+et l'optimum de 10⁶ y coûte +4 %. La cause est l'amortissement — un segment à
+10⁶, six cent quarante à 10¹⁰ — et le criblage seul, lui, décroît bien de façon
+monotone avec `-p`. La table complète est dans `analyse.md`, sous « Pistes
+fermées », à côté du même verdict pour `-s` : **un optimum mesuré hors régime
+ne se transporte pas**, et l'écart est ici plus violent que pour le segment.
+
+**Deux défauts de documentation, corrigés.** `README.md` et `LISEZMOI.md`
+donnaient `./roue12 -v 1e12`, qui répond `Invalid limit` avec rc=1 : aucune
+option ne peut précéder la borne, ce que la ligne d'usage du programme énonce
+pourtant correctement. Et `BUG.md` citait quatre hash de commit qui n'existent
+plus — la réécriture d'historique d'avant publication, entrée `0268245`, les
+avait invalidés sans que le recensement suive. Les six références résolvent
+désormais, chacune vérifiée deux fois, par le contenu du correctif et par la
+date d'auteur qui reproduit l'horodatage déjà écrit dans le fichier. B6 citait
+en outre le commit de documentation au lieu du commit de code, et B7 était resté
+« non commité » alors que `388f010` avait atterri.
+
 ## 2026-09-03 — Comparaison à primesieve, 10¹¹ à 10¹⁵ · trois prédictions ratées
 
 Campagne de comparaison seule : aucun changement de code, aucun réglage retenu.
