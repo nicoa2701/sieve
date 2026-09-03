@@ -279,11 +279,15 @@ premier relevé à faire si cette piste doit être travaillée.
 
 À ne pas rouvrir sans élément nouveau. Chacune a été mesurée, pas raisonnée.
 
-**Réduire le segment pour soulager la L2.** Mesuré perdant à 10¹². À 512 KiB, les
-défauts L2 chutent de 71 %, le trafic DRAM d'un facteur 525, le CPI descend à
-0,710 — le meilleur de toutes les configurations essayées — et le programme est
-**10,7 % plus lent**, le volume d'instructions montant de 18,8 %. Le débordement
-de la L2 est le prix délibéré de l'amortissement par segment, pas un défaut.
+**La taille de segment, dans les deux directions.** Le plafond par défaut n'est
+pas un réglage à affiner : c'est un bord de capacité, et les deux versants sont
+mesurés.
+
+*Réduire* — perdant à 10¹². À 512 KiB, les défauts L2 chutent de 71 %, le trafic
+DRAM d'un facteur 525, le CPI descend à 0,710 — le meilleur de toutes les
+configurations essayées — et le programme est **10,7 % plus lent**, le volume
+d'instructions montant de 18,8 %. Le débordement de la L2 est le prix délibéré de
+l'amortissement par segment, pas un défaut.
 
 ```
   -s KiB       256     512    1024    2048    4096      (temps a 1e12)
@@ -291,10 +295,40 @@ de la L2 est le prix délibéré de l'amortissement par segment, pas un défaut.
   primesieve 13,16   12,70   13,47   13,98   13,98
 ```
 
-Les deux binaires tournent déjà à leur optimum par défaut, mais pas au même
-endroit : primesieve plafonne à un demi-L2 et se dégrade de 10 % au-delà, roue12
-trouve son minimum quatre fois plus haut et reste plat jusqu'à 4096. Le pavage
-multi-étages rend sa localité indépendante de la taille du segment.
+*Agrandir* — catastrophique à 10¹⁴, `-s 4096` contre le défaut de 2048 :
+
+```
+                    2048 KiB    4096 KiB
+  temps              1 552 s     4 487 s     x2,89 plus lent
+  instructions     139 009 T   110 921 T     -20,2 %
+  CPI                  0,722       3,335     x4,62
+  DRAM                  83 G     1 680 G     x20,2
+  debit DRAM        3,4 Go/s   24,0 Go/s
+```
+
+L'amortissement fonctionne exactement comme prévu — **−20,2 % d'instructions** —
+et le coût unitaire l'emporte d'un facteur 4,6. Cause : 16 threads × 4096 KiB =
+64 Mio contre 32 Mio de L3. Le jeu de travail ne tient plus et le trafic DRAM,
+resté sous 6 Go/s sur les cinq décades, bondit à 24 Go/s. Le plafond par défaut
+place 16 × 2 Mio = **exactement la capacité L3** ; la règle de dimensionnement
+automatique tombe juste des deux côtés.
+
+**Un balayage de segment ne se transporte pas d'une borne à l'autre.** À 10¹²,
+`-s 4096` ne coûte que +1,3 % ; à 10¹⁴ il coûte +189 %. Même réglage, même
+machine, verdicts opposés — c'est ce qui avait justifié de rouvrir la piste, et
+il faut refaire le balayage dans le régime où l'on veut conclure. L'explication
+probable, non mesurée : à 10¹² les listes de seaux sont petites et l'empreinte
+réelle reste sous la L3 malgré un bitset de 4096 KiB.
+
+Note d'usage : le plafond L3 ne concerne que le dimensionnement automatique, une
+valeur explicite est honorée telle quelle, vérifié jusqu'à `-s 8192`. Repère hors
+régime de seaux, à 10¹¹ : 4096 KiB coûte +6 %, 8192 KiB coûte ×2,7.
+
+Attention aussi au compteur de cycles sur ces configurations : à 4096 KiB les
+cycles montent ×3,69 pour un temps ×2,89, parce que les cœurs bloqués sur la
+mémoire consomment moins et montent en fréquence — 5,21 GHz contre 4,13 GHz. Le
+compteur de cycles surestime le ralentissement dès qu'on compare deux points à
+intensité mémoire très différente.
 
 **Chasser les défauts L2.** roue12 en porte structurellement plus que primesieve,
 avec un meilleur CPI. Ils sont recouverts par le désordonné. Porter les défauts
@@ -313,18 +347,17 @@ quantité de travail constante, ce qu'un changement de segment ne fait jamais.
 
 ## Pistes ouvertes
 
-**Le plafond de segment à 10¹⁵.** C'est la piste la mieux motivée. roue12
-plafonne son segment à 2048 KiB, borné par le L3 par thread (32 MiB / 16). À
-10¹⁵ le nombre de premiers cribleurs a triplé depuis 10¹⁴ mais le segment n'a pas
-bougé, et c'est exactement là que le terme de quantité s'effondre, de ×1,235 à
-×1,056. Le balayage qui ferme cette piste a été fait **à 10¹²**, dans un régime
-où les seaux ne dominaient pas — il ne dit rien du comportement à 10¹⁵.
+**Une comptabilité de seaux moins chère.** C'est la piste la mieux chiffrée, et
+la seule qui reste sur le criblage. Le test `-s 4096` à 10¹⁴ a mesuré la taille
+du gain disponible : **−20,2 % d'instructions**, uniquement en amortissant la
+comptabilité de seaux sur des segments deux fois plus longs. Le levier est donc
+réel et mesuré. Il est simplement inatteignable par la taille de segment, bornée
+par la capacité L3 sur cette machine — le récupérer demande de payer moins par
+entrée de seau, pas d'en payer moins souvent.
 
-Test à faire, du moins cher au plus cher : `-s 4096` à 10¹⁴ (26 min) pour un
-signal, puis à 10¹⁵ (5 h 30) s'il est positif. Le plafond L3 ne concerne que le
-dimensionnement automatique — une valeur explicite est honorée telle quelle,
-vérifié jusqu'à `-s 8192`. Point de repère hors régime de seaux, à 10¹¹ :
-4096 KiB coûte +6 %, 8192 KiB coûte ×2,7.
+C'est aussi ce qui expliquerait l'effondrement du terme de quantité à 10¹⁵ : le
+segment plafonne pendant que la population de seaux triple. Inutile de relancer
+`-s 4096` à 10¹⁵, la falaise de capacité y est la même et pire.
 
 **Le parallélisme.** roue12 utilise 15,65 à 15,76 threads utiles sur 16, contre
 15,96 à 15,99 pour primesieve — 1,5 à 2 % laissés sur la table, probablement en
