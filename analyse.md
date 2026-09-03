@@ -212,6 +212,69 @@ croît en √n.
 
 ---
 
+## Le régime des seaux
+
+C'est le mécanisme unique derrière tout ce qui précède. **Plus la borne monte,
+plus l'étage des seaux pèse dans le budget d'instructions.**
+
+Le nombre de radiations à effectuer croît comme *n·Σ1/p* sur les premiers
+jusqu'à √n, soit ×10,23 à ×10,31 par décade — presque exactement le facteur
+théorique. Tout ce qui est dépensé au-delà est donc un changement de **mélange**,
+pas de volume :
+
+| instructions par radiation | 10¹¹ | 10¹² | 10¹³ | 10¹⁴ | 10¹⁵ |
+|---|---|---|---|---|---|
+| roue12 | 0,237 | 0,272 | 0,329 | 0,457 | **0,675** |
+| primesieve | 0,256 | 0,303 | 0,407 | 0,565 | 0,713 |
+
+Le coût par radiation de roue12 **triple** sur la série, et sa croissance
+s'accélère : ×1,15, ×1,21, ×1,39, ×1,48 par décade. Le travail élémentaire n'a
+pas changé de nature ; c'est un étage plus cher qui prend la place.
+
+**Le moteur arithmétique.** Les premiers cribleurs vont jusqu'à √n.
+
+```
+  n        racine(n)      pi(racine(n))
+  1e11      3,16e5              27 300
+  1e12      1,00e6              78 498
+  1e13      3,16e6            ~227 600
+  1e14      1,00e7             664 579
+  1e15      3,16e7          ~1 946 000
+```
+
+Soixante-et-onze fois plus de premiers à placer sur la série, et les plus grands
+sont cent fois plus grands — donc de plus en plus nombreux à ne pouvoir barrer
+qu'une fois par segment, ce qui est le critère d'entrée dans les seaux.
+
+**Le tarif.** Le profil du 2026-08-30 dans `HISTORIQUE.md`, mesuré à 10¹⁵ :
+les seaux prennent **43,6 % des instructions pour 8,7 % du marquage**, soit
+environ cinq fois le coût moyen par radiation, et 29,4 % des cycles. Une part de
+marquage qui grandit lentement suffit donc à déplacer beaucoup d'instructions.
+
+**Attention à la formulation.** Les seaux dominent le budget d'instructions, pas
+le travail : à 10¹⁵ ils portent moins d'un neuvième des radiations. Dire que le
+travail « est presque entièrement dans les seaux » est faux et conduit à
+surestimer ce qu'un changement sur cet étage peut rapporter.
+
+À l'autre bout, la même arithmétique éclaire le point de départ : à 10¹¹, √n vaut
+3,16·10⁵, un ordre de grandeur sous le seuil qu'implique ce profil.
+**L'étage des seaux y est quasi vide** — et c'est exactement la décade où l'avance
+de roue12 est la plus microarchitecturale de la série, terme de coût à son
+maximum (×1,389).
+
+**Ce que ce seul mécanisme explique.** La convergence des CPI, puisque les seaux
+sont le même algorithme des deux côtés et n'offrent aucune localité à paver.
+L'accélération du volume d'instructions de roue12. L'amélioration continue du
+taux de défauts L1 de primesieve. Et l'effondrement du terme de quantité à 10¹⁵,
+quand le segment plafonne pendant que la population de seaux triple.
+
+**Ce qui n'est pas mesuré.** La part des seaux décade par décade. Il faudrait des
+compteurs par étage, non relevés pendant cette campagne ; seul le point à 10¹⁵
+existe. La courbe intermédiaire est une inférence, pas une mesure — c'est le
+premier relevé à faire si cette piste doit être travaillée.
+
+---
+
 ## Pistes fermées
 
 À ne pas rouvrir sans élément nouveau. Chacune a été mesurée, pas raisonnée.
