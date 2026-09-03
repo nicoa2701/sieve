@@ -39,7 +39,7 @@ SIMD retenu pour le pré-crible ; `make simd` détaille la détection.
 
 ```bash
 ./roue12 1e13 -d 1e11   # compte dans [10¹³, 10¹³ + 10¹¹]
-./roue12 -v 1e12        # montre le dimensionnement retenu
+./roue12 1e12 -v        # montre le dimensionnement retenu
 make check              # 127 contrôles de validation
 make sanitize           # ASan + UBSan, les deux variantes SINK_TAIL
 ```
