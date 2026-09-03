@@ -66,6 +66,24 @@
 #define BUCKET_AMORT 40
 #define MIN_CHUNKS_PER_THREAD 2
 
+/*
+ * Part minimale de travail par thread. Chaque thread paie une mise en place —
+ * sa creation, son bitset de segment, ses curseurs, son anneau de seaux — et
+ * en dessous de MIN_THREAD_SPAN entiers a cribler cette mise en place coute
+ * plus que le criblage qu'elle sert.
+ *
+ * Mesure a 1e6, ou l'intervalle entier tient dans un seul segment : 512 us au
+ * defaut contre 109 a -t 1, pour 24 us de criblage reel. Le croisement se
+ * situe entre 3e7 et 1e8, ce que la constante encadre.
+ *
+ * Le second terme, racine(limit) / THREAD_SPAN_ROOT_DIV, prend le relais
+ * au-dela de 2,5e15 : la mise en place d'un thread croit comme racine(n),
+ * donc sa part doit croitre avec elle. Il est inerte sur tout le domaine
+ * mesure jusqu'ici.
+ */
+#define MIN_THREAD_SPAN 10000000ULL
+#define THREAD_SPAN_ROOT_DIV 5
+
 #define BLOCK_MIN_TURNS 1
 
 
@@ -2290,6 +2308,33 @@ static uint64_t default_block_bytes(int threads)
     return 0;
 }
 
+#ifdef _OPENMP
+/*
+ * Nombre de threads que l'intervalle demande peut reellement occuper. Le
+ * travail disponible est divise par la part minimale d'un thread ; en dessous
+ * d'une part, un seul thread. Ne s'applique qu'au choix automatique.
+ */
+static int GetNumThreads(int max_threads,
+                         uint64_t span,
+                         uint64_t root)
+{
+    uint64_t share = root / THREAD_SPAN_ROOT_DIV;
+
+    if (share < MIN_THREAD_SPAN)
+        share = MIN_THREAD_SPAN;
+
+    uint64_t want = span / share;
+
+    if (want < 1)
+        want = 1;
+
+    if (want > (uint64_t)max_threads)
+        want = (uint64_t)max_threads;
+
+    return (int)want;
+}
+#endif
+
 static uint64_t default_chunk_bytes(int threads)
 {
 #ifdef _SC_LEVEL2_CACHE_SIZE
@@ -2500,9 +2545,15 @@ static void usage(FILE *out, const char *prog)
             "          passe par le seau, en deca par la bande du "
             "milieu (0 = automatique :\n"
             "          2,5 segments)\n"
-            "  -t N    nombre de threads (defaut : ce que decide "
-            "OpenMP, soit tous les CPU\n"
-            "          logiques)\n"
+            "  -t N    nombre de threads. Par defaut, le travail "
+            "disponible divise par la\n"
+            "          part minimale d'un thread (10^7 entiers, ou "
+            "racine(HAUT)/5 au-dela\n"
+            "          de 2,5e15), plafonne aux CPU logiques : un "
+            "intervalle de moins de\n"
+            "          2e7 entiers tourne sur un seul thread.\n"
+            "          Une valeur explicite est honoree telle quelle "
+            "et -v dit le choix\n"
             "  -c SEG  segments par chunk, l'unite que les threads se "
             "volent\n"
             "          (defaut : de quoi faire %d chunks par thread, "
@@ -2965,6 +3016,9 @@ int main(int argc, char **argv)
     int threads = 1;
 #endif
 
+    int max_threads    = threads;
+    int threads_capped = 0;
+
     struct timespec t0, t1;
 
     clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -2983,6 +3037,24 @@ int main(int argc, char **argv)
 
     while (root && root > limit / root)
         root--;
+
+#ifdef _OPENMP
+    /* Le plafond ne vaut que pour le choix automatique : un -t explicite est
+       honore tel quel, comme une taille de segment explicite. */
+    if (want_threads <= 0)
+    {
+        int useful =
+            GetNumThreads(max_threads, limit - low_limit + 1, root);
+
+        if (useful < threads)
+        {
+            omp_set_num_threads(useful);
+
+            threads        = useful;
+            threads_capped = 1;
+        }
+    }
+#endif
 
     size_t prime_count;
 
@@ -3797,7 +3869,12 @@ int main(int argc, char **argv)
 
     printf("Wheel: 30\n");
 
-    printf("Threads: %d\n", threads);
+    printf("Threads: %d", threads);
+
+    if (threads_capped)
+        printf(" (ramene de %d, part minimale par thread)", max_threads);
+
+    printf("\n");
 
     printf("Segment: %llu KiB bitset (par thread, %s)\n",
            (unsigned long long)segment_kb,
