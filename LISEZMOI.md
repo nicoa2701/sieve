@@ -34,8 +34,14 @@ make            # -O3 -march=native -fopenmp
 ./roue12 1e12   # les premiers jusqu'à 10¹²
 ```
 
-Aucune dépendance en dehors de la libc et d'OpenMP. `make` annonce le palier
-SIMD retenu pour le pré-crible ; `make simd` détaille la détection.
+Aucune dépendance en dehors de la libc et d'OpenMP. `make` annonce le
+compilateur et le palier SIMD retenu pour le pré-crible ; `make simd` détaille
+la détection.
+
+Le compilateur est le premier de `gcc-15`, `gcc-13` qui soit installé, à défaut
+le `cc` du système. Un `CC` explicite l'emporte toujours — `make CC=clang` — et
+la liste de recherche est elle-même surchargeable :
+`make CC_PREFERRED="gcc-14 gcc-13"`.
 
 ```bash
 ./roue12 1e13 -d 1e11   # compte dans [10¹³, 10¹³ + 10¹¹]

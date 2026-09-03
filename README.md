@@ -34,8 +34,12 @@ make            # -O3 -march=native -fopenmp
 ./roue12 1e12   # count primes up to 10¹²
 ```
 
-No dependency beyond libc and OpenMP. `make` reports the SIMD tier picked for
-the pre-sieve; `make simd` shows the detection in detail.
+No dependency beyond libc and OpenMP. `make` reports the compiler and the SIMD
+tier picked for the pre-sieve; `make simd` shows the detection in detail.
+
+The compiler is the first of `gcc-15`, `gcc-13` that is installed, falling back
+to the system `cc`. An explicit `CC` always wins — `make CC=clang` — and the
+search list is itself overridable: `make CC_PREFERRED="gcc-14 gcc-13"`.
 
 ```bash
 ./roue12 1e13 -d 1e11   # count inside [10¹³, 10¹³ + 10¹¹]
