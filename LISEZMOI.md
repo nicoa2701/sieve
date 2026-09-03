@@ -203,6 +203,13 @@ Chaque thread porte son propre segment, ses propres curseurs et son propre
 anneau de seaux ; rien n'est partagé sur le chemin d'écriture. Le comptage final
 est un popcount sur le bitset.
 
+**Le nombre de threads suit le travail.** Chaque thread paie une mise en place
+— sa création, son bitset de segment, ses curseurs, son anneau de seaux — donc
+il en est lancé un par 10⁷ entiers à cribler, et pas davantage. Un intervalle
+de moins de 2·10⁷ entiers tourne sur un seul thread, ce qui va 40 % plus vite
+que d'en lancer seize pour un unique chunk ; à partir de 1,6·10⁸ tous les CPU logiques
+travaillent. `-v` annonce le nombre retenu et dit quand il a été réduit.
+
 ---
 
 ## Utilisation
@@ -234,7 +241,7 @@ plus le pré-crible des premiers jusqu'à √HAUT.
 | `-L N` | bande de la plaque, en plaques (défaut 1 ; l'élargir a été mesuré perdant) |
 | `-K KiB` | fenêtre de seau ; par défaut la tranche L2, ramenée à la puissance de deux qui pave le segment |
 | `-J N` | frontière du seau, en fenêtres (0 = automatique : 2,5 segments) |
-| `-t N` | nombre de threads (défaut : tous les CPU logiques) |
+| `-t N` | nombre de threads. Par défaut, le travail disponible divisé par la part minimale d'un thread (10⁷ entiers, ou √HAUT/5 au-delà de 2,5·10¹⁵), plafonné aux CPU logiques — un intervalle de moins de 2·10⁷ entiers tourne sur un seul thread. Une valeur explicite est honorée telle quelle |
 | `-c SEG` | segments par chunk, l'unité que les threads se volent (défaut : 8 chunks par thread) |
 | `-p PMAX` | borne du pré-crible (défaut 113, 0 pour désactiver) |
 | `-Q N` | distance de préchargement du vidage des seaux, en entrées (défaut 32) |

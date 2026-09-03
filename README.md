@@ -197,6 +197,14 @@ thread carries its own segment, its own cursors and its own bucket ring;
 nothing is shared on the write path. The final count is a popcount over the
 bitset.
 
+**The thread count follows the work.** Every thread pays a setup — its
+creation, its segment bitset, its cursors, its bucket ring — so one is spawned
+per 10⁷ integers to sieve and no more. An interval narrower than 2·10⁷ integers
+runs on a single thread, which is 40 % faster than spawning sixteen for one
+chunk; from
+1.6·10⁸ every logical CPU is used. `-v` reports the count and says when it was
+reduced.
+
 ---
 
 ## Usage
@@ -228,7 +236,7 @@ plus the pre-sieve of the primes up to √HIGH.
 | `-L N` | slab band, in slabs (default 1; widening it measured as a loss) |
 | `-K KiB` | bucket window; default the L2 chunk, rounded to the power of two paving the segment |
 | `-J N` | bucket boundary, in windows (0 = automatic: 2.5 segments) |
-| `-t N` | thread count (default: every logical CPU) |
+| `-t N` | thread count. Default: the work available divided by a thread's minimum share (10⁷ integers, or √HIGH/5 past 2.5·10¹⁵), capped at every logical CPU — an interval narrower than 2·10⁷ integers runs on a single thread. An explicit value is honoured as given |
 | `-c SEG` | segments per chunk, the unit threads steal (default: 8 chunks per thread) |
 | `-p PMAX` | pre-sieve bound (default 113, 0 to disable) |
 | `-Q N` | prefetch distance when draining buckets, in entries (default 32) |
