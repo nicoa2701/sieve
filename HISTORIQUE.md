@@ -9,6 +9,59 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-03 — `e0ae5c1` · Le nombre de threads suit le travail
+
+Suite directe de l'entrée ci-dessous, qui avait mesuré le coût sans le
+corriger : à 10⁶, quinze threads sur seize allouent leur bitset, leurs
+curseurs et leur anneau, puis attendent à la barrière, pour 24 µs de criblage
+réel. Premier changement de code depuis `9484bbc`.
+
+**La règle.** Le travail disponible divisé par la part minimale d'un thread,
+plafonné aux CPU logiques :
+
+```
+  part    = max(racine(limit) / 5, 1e7)
+  threads = clamp((HAUT - BAS + 1) / part, 1, CPU logiques)
+```
+
+Un seul thread pour un intervalle de moins de 2·10⁷ entiers, tous à partir de
+1,6·10⁸. Le second
+terme prend le relais au-delà de 2,5·10¹⁵, la mise en place d'un thread
+croissant comme √n ; il est inerte sur tout le domaine mesuré, 10¹⁵ compris.
+
+**Elle vient de primesieve**, `ParallelSieve::idealNumThreads()`, constante
+`MIN_THREAD_DISTANCE` comprise. C'est ce qui explique que la référence annonce
+`Threads = 1` à 10⁶ et ignore un `-t 16` explicite. La règle a été vérifiée sur
+onze bornes contre sa prédiction analytique avant d'être reprise, puis sur neuf
+après portage : pas un écart.
+
+```
+  A/B entrelace, 6 tours de batches de 20, temps mural
+  1e6     0,691 ms -> 0,409 ms   -40,8 %
+  1e7     0,903    -> 0,627      -30,5 %
+  1e8     1,523    -> 1,304      -14,4 %
+  1e9     5,366    -> 5,422       +1,0 %
+  1e10   58,875    -> 59,203      +0,6 %
+```
+
+Au-delà de 1,6·10⁸ le compte de threads ne bouge pas : les deux derniers points
+sont du bruit, les bandes valant 1,80 % à 10⁹ et 1,2 % à 10¹⁰. Aucune campagne
+n'est périmée — C4 mesure à π(10¹⁰) et sur des fenêtres de 10¹⁰, toutes
+au-dessus du seuil.
+
+**Une divergence assumée d'avec la référence.** primesieve traite `-t` comme un
+simple plafond ; ici une valeur explicite est honorée telle quelle, comme une
+taille de segment explicite. `analyse.md` avait déjà posé cette convention pour
+`-s`, et elle préserve la possibilité de balayer `-t` pour mesurer — ce qu'un
+plafond dur interdirait, et dont cette session s'est justement servie.
+
+**Ce que ça ne corrige pas.** La dispersion. À 10⁹, où le compte de threads est
+inchangé, roue12 reste à ±1,80 % avec une distribution bimodale contre ±0,25 %
+et unimodale pour primesieve. C'est un autre mécanisme — primesieve arrondit son
+nombre de lots à un multiple du nombre de threads, `getThreadDistance()`, là où
+roue12 fait du vol de travail dynamique. Cela recoupe la piste ouverte des
+1,5 à 2 % de threads utiles laissés sur la table, toujours non instrumentée.
+
 ## 2026-09-03 — À 10⁶ : ce qu'une borne basse mesure · `-p` fermé, deux défauts de documentation
 
 Parti d'un simple `./roue12 1e6`. Aucun changement de code ; deux fichiers de
