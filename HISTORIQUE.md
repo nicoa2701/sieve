@@ -9,6 +9,77 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-03 — Comparaison à primesieve, 10¹¹ à 10¹⁵ · trois prédictions ratées
+
+Campagne de comparaison seule : aucun changement de code, aucun réglage retenu.
+Cinq décades sous `perf`, runs strictement séquentiels sur machine au repos, les
+deux binaires à leur optimum vérifié par balayage — roue12 à 2048 KiB, primesieve
+à 512. π(n) identique des deux côtés aux cinq décades. L'avance de roue12 reste
+entière partout mais s'érode de façon monotone, ×1,494 à 10¹¹ puis ×1,170 à 10¹⁵.
+
+L'entrée ne retient que ce qui a été prédit *avant* la décade suivante, et
+démenti par elle. Les trois prédictions ont été faites en cours de campagne, les
+trois sont fausses.
+
+**1. « Le débordement de la L2 est le point faible. »** Segment de 2048 KiB par
+thread contre 1 MiB de L2 partagé entre deux threads SMT, d'où 6,09 % de défauts
+L2 contre 2,52 % chez primesieve. Prédiction : réduire le segment est le prochain
+gain. Mesuré à 10¹², à 512 KiB — les défauts L2 chutent de 71 %, le trafic DRAM
+d'un facteur 525, le CPI descend à 0,710, **le meilleur de toutes les
+configurations essayées** — et le programme est **10,7 % plus lent**, le volume
+d'instructions montant de 18,8 %. Le débordement n'est pas un défaut à corriger
+mais le prix délibéré de l'amortissement par segment. Corollaire retenu : la
+configuration au meilleur IPC de toute l'étude (1,409) n'est pas la plus rapide.
+
+**2. « La croissance surlinéaire des défauts L2 va éroder l'avance. »** Leur
+densité par instruction avait presque doublé entre 10¹² et 10¹³, de 1,36 à 2,61
+pour 100. Extrapolation d'un seul écart de décade. Mesuré ensuite : 2,63 à 10¹⁴,
+puis **1,85 à 10¹⁵**, un recul de 30 %. Transition de régime, pas dérive.
+
+**3. « Quantité plafonnée, coût mort : le ratio se stabilise vers ×1,20. »** La
+décomposition `cycles = instructions × CPI` factorise l'avance en un terme de
+quantité et un terme de coût unitaire.
+
+```
+                    1e11    1e12    1e13    1e14    1e15
+  total (cycles)   1,505   1,412   1,345   1,235   1,170
+  quantite         1,083   1,114   1,237   1,235   1,056
+  cout unitaire    1,389   1,267   1,087   0,999   1,108
+```
+
+À 10¹⁴ la quantité valait ×1,235 et le coût exactement ×0,999. Prédiction : les
+deux tiennent, le total se stabilise entre ×1,20 et ×1,22. Mesuré à 10¹⁵ : les
+deux termes se sont **inversés**, quantité tombée à ×1,056 et coût remonté à
+×1,108, et le total a glissé à ×1,170 — sous la fourchette annoncée.
+
+**Une erreur d'instrument, en plus.** Sur Zen, `cache-references` et
+`cache-misses` ne visent pas le dernier niveau comme sur Intel : ils comptent les
+requêtes et défauts **L2**. Lus comme des défauts de LLC ils donnent l'image d'un
+programme qui martèle la DRAM. `ls_any_fills_from_sys.dram_io_all` montre
+l'inverse — 5,8 Go/s au maximum sur les cinq décades, jamais près d'une limite de
+bande passante. La conclusion « roue12 est plus faible en mémoire » en dépendait
+entièrement. À vérifier avant toute lecture de ces deux compteurs génériques.
+
+**Le motif d'erreur, deux fois de plus — et un motif nouveau.** Les prédictions 1
+et 2 sont la faute déjà nommée le 2026-08-30, sous ses quatrième et cinquième
+formes : *le compteur mémoire est mauvais, donc le gain est là*. Cinq fois
+corrigée par la mesure désormais, dont deux dans cette seule campagne.
+
+La prédiction 3 est d'une autre nature et mérite d'être retenue telle quelle :
+*le terme qui domine aujourd'hui dominera demain*. La décomposition
+`quantité × coût` factorise exactement à chaque décade, sans résidu, et elle a
+rendu lisible un double renversement que le ratio global masquait entièrement.
+Mais ses deux termes ne sont pas des propriétés stables du programme. Ce sont
+deux monnaies dans lesquelles un même levier — le pavage multi-étages, le plafond
+de segment imposé par le L3 par thread, le poids de l'étage des seaux —
+s'encaisse alternativement selon le régime arithmétique. Le coût a dominé à 10¹¹
+et 10¹², la quantité à 10¹³ et 10¹⁴, le coût de nouveau à 10¹⁵. **Extrapoler un
+des deux termes suppose une stabilité que la mesure a démentie deux fois.**
+
+Le seul élément robuste sur les cinq décades est l'érosion monotone du total, et
+aucune des explications avancées avant la décade suivante ne l'a correctement
+anticipée. Une sixième décade coûterait environ 70 h par binaire.
+
 ## 2026-08-30 — Bande du milieu · trois leviers fermés, et le motif d'erreur
 
 L'entrée du profil des seaux désignait un second chantier : `sweep_exact_calc`
