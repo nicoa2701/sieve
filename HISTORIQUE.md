@@ -9,6 +9,86 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-04 — `87d4a49` · 10¹⁵ remesuré, et la vraie raison de son silence
+
+Le point resté ouvert de l'entrée ci-dessous est fermé : les 5,4 h de banc ont
+été passées. `π(10¹⁵) = 29 844 570 422 669` en **19 262,178 s**, 16 threads,
+segment 2048 KiB, lancé à 16:13:21 et rendu à 21:34:23 UTC le 2026-09-03 —
+5 h 21 min d'horloge, qui recoupent le temps annoncé à la seconde près. Le
+binaire est celui des quatre autres bornes, non reconstruit depuis 15:24 : les
+deux commits qui séparent le run de `5dbf4d5` ne touchent que la documentation.
+
+**La série complète**, pour qu'elle se lise ici d'un seul bloc — les quatre
+premières bornes de 15:35:22 à 16:03:31 UTC, la dernière de 16:13:21 à
+21:34:23, toutes à 16 threads :
+
+```
+  1e11       4 118 054 813      714,8 ms   segment 1024 KiB
+  1e12      37 607 912 018       9,120 s   segment 2048 KiB
+  1e13     346 065 536 839     116,118 s   segment 2048 KiB
+  1e14   3 204 941 750 802   1 525,400 s   segment 2048 KiB
+  1e15  29 844 570 422 669  19 262,178 s   segment 2048 KiB
+```
+
+Le compte à 10¹⁵ reprend celui du 2026-08-29 ; le temps est à **−0,9 %** de
+cette mesure-là, ce qui aligne les cinq bornes sur −1,0 %, +1,8 %, +0,4 %,
+−1,4 % et −0,9 % : toujours sans signe constant, toujours rien de distinguable
+du bruit. Le tableau
+de la vitrine perd sa dague, sa croissance à 10¹⁵ se rapporte enfin au 10¹⁴ du
+même tableau — ×12,63 au lieu de ×12,58 — et la fourchette par décade s'ouvre à
+×12,6–×13,1 sur cinq points au lieu de quatre.
+
+**Correction de l'entrée ci-dessous.** Elle explique l'absence de `bdccb6f` et
+`9484bbc` par « un comptage complet est dominé par le bas de son intervalle, où
+√N reste sous le seuil des seaux ». **C'est faux**, et le comptage à 10¹⁵ le
+rendait intenable : le seuil de 5 242 880 est franchi dès 2,75·10¹³, donc 97 %
+de l'intervalle `[0, 10¹⁵]` crible en régime de seaux, et la dernière décade en
+fait 90 % à elle seule. Si l'explication tenait, un comptage complet à 10¹⁵
+aurait dû montrer une bonne part des 6,6 %.
+
+**La vraie raison est mécanique, et elle ne concerne que `bdccb6f`.** Ce
+changement n'agit que par un plancher sur la taille du chunk : `need =
+1 587 772 × 40 / 16 777 216`, soit 4 segments à cette borne. Le découpage par
+défaut, lui, est l'intervalle divisé en 8 chunks par thread, donc il grandit
+avec l'intervalle et passe au-dessus du plancher presque tout de suite. Relevé
+à `-v`, borne haute 10¹⁵ :
+
+```
+  -d 1e10    Chunks:  40 of        4 segment(s)   plancher actif (80x2 -> 40x4)
+  -d 1e11    Chunks: 123 of       13 segment(s)   plancher inactif
+  -d 1e12    Chunks: 128 of      125 segment(s)   plancher inactif
+  1e15       Chunks: 128 of ~124 000 segment(s)   calculé, 15,9 M segments / 128
+```
+
+Dès la fenêtre de 10¹¹ — celle-là même sur laquelle `9484bbc` a été mesuré —
+`bdccb6f` est déjà inerte. Sur un comptage complet le découpage par défaut est
+30 000 fois plus large que le plancher. Ce n'était pas une découverte à faire :
+l'entrée `bdccb6f` notait « vérifiée inchangée aussi sur les comptages
+complets », et le commentaire de `BUCKET_AMORT` dit que la contrainte « ne mord
+que sur les intervalles étroits à borne haute ». L'entrée ci-dessous a cherché
+une explication statistique là où le code en donnait une exacte.
+
+**Reste `9484bbc`**, qui agit lui partout où le chemin des seaux passe. Ses
+2,8 % sont mesurés là où ce régime est saturé — 1 587 772 premiers à seau à
+10¹⁵ contre 300 409 à 10¹⁴ — et un comptage complet crible l'essentiel de son
+intervalle bien en dessous de cette population. Un ou deux points de pourcent
+attendus au total, sous la bande d'un passage unique : le −0,9 % observé ne les
+distingue ni ne les contredit.
+
+**Le corollaire de l'entrée ci-dessous reste vrai, pour une meilleure raison.**
+Juger un changement du régime des seaux sur un comptage complet le mesure là où
+il n'agit pas — non parce que le bas de l'intervalle domine le temps, mais
+parce qu'un long intervalle désactive le seul levier qui dépend du découpage et
+dilue l'autre. Le banc de ces changements reste la fenêtre étroite à borne
+haute, et le point de 10¹¹ de C4 reste celui où la bande de reproductibilité
+descend à 1 %.
+
+Les limites de protocole ne bougent pas — passage unique, aucune référence
+primesieve entrelacée — donc cette borne reste, comme les quatre autres, une
+mesure de vitrine et non de campagne. `MESURES.md` n'est pas touché.
+
+---
+
 ## 2026-09-03 — `ebc0de9` · Comptage complet remesuré à jour du commit
 
 Le tableau des cinq bornes de la vitrine datait de `e29ec95`, donc d'avant les
