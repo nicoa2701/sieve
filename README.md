@@ -23,7 +23,7 @@ $ ./roue12 1e12
 Found 37607912018 primes up to 1000000000000 using 16 threads, segment 2048 KiB in 8.961s
 ```
 
-> **π(10¹⁵) = 29,844,570,422,669** — counted in 5 h 24 min on a Ryzen 7 9700X.
+> **π(10¹⁵) = 29,844,570,422,669** — counted in 5 h 21 min on a Ryzen 7 9700X.
 
 ---
 
@@ -56,8 +56,8 @@ make sanitize           # ASan + UBSan, both SINK_TAIL variants
 
 | | |
 |:--|:--|
-| **Commit** | [`5dbf4d5`](../../commit/5dbf4d5) |
-| **Date** | 2026-09-03, 15:35 → 16:04 (UTC) |
+| **Commit** | [`5dbf4d5`](../../commit/5dbf4d5) — 10¹¹ to 10¹⁴ · [`d4b06ec`](../../commit/d4b06ec) — 10¹⁵ |
+| **Date** | 2026-09-03, 15:35 → 21:34 (UTC) |
 | **CPU** | AMD Ryzen 7 9700X — 8 cores / 16 threads |
 | **Threads used** | 16 |
 
@@ -68,22 +68,30 @@ make sanitize           # ASan + UBSan, both SINK_TAIL variants
 | 10¹² | 37,607,912,018 | 9.120 s | ×12.76 |
 | 10¹³ | 346,065,536,839 | 116.1 s | ×12.73 |
 | 10¹⁴ | 3,204,941,750,802 | 1,525.4 s | ×13.14 |
-| 10¹⁵ † | 29,844,570,422,669 | 19,446.3 s | ×12.58 |
+| 10¹⁵ | 29,844,570,422,669 | 19,262.2 s | ×12.63 |
 
-† **10¹⁵ was not re-measured** — 5.4 h of bench time. The row keeps its
-original provenance, [`e29ec95`](../../commit/e29ec95) on 2026-08-29, and its
-growth factor is relative to that series' own 10¹⁴ (1,546.3 s), not to the one
-in the table.
+All five limits come from the same binary: `ebc0de9` and `d4b06ec` touch
+documentation only, and 10¹⁵ started ten minutes after 10¹⁴ finished.
 
-The growth factor stays between **×12.7 and ×13.1 per decade** across the four
-re-measured limits: a stable overhead above the ×10 of the range itself, with no
-cliff as the working set outgrows each successive cache level.
+The growth factor stays between **×12.6 and ×13.1 per decade** across all five
+limits: a stable overhead above the ×10 of the range itself, with no cliff as
+the working set outgrows each successive cache level.
 
-The four limits land at −1.0%, +1.8%, +0.4% and −1.4% of the `e29ec95` figures,
-with no consistent sign: nothing distinguishable from noise. The two sieving
-changes between the two commits — `bdccb6f` and `9484bbc`, worth 6.6% on a
-narrow window at 10¹⁵ — therefore do not show up on a full count, which is
-dominated by the low end of the interval where the bucket regime barely exists.
+The five limits land at −1.0%, +1.8%, +0.4%, −1.4% and −0.9% of the
+[`e29ec95`](../../commit/e29ec95) figures measured on 2026-08-29, with no
+consistent sign: nothing distinguishable from noise. The two sieving changes
+between the two commits therefore do not show up on a full count, **not even the
+one that runs all the way to 10¹⁵**, and their mechanism predicts exactly that:
+
+- [`bdccb6f`](../../commit/bdccb6f) is worth 6.6% on a 10¹⁰-wide window at 10¹⁵,
+  but all it does is impose a floor on chunk size — 4 segments, at that limit.
+  As soon as the interval gets longer the default split rises above the floor
+  and the floor stops binding: 4 segments per chunk on `-d 1e10`, 13 on
+  `-d 1e11`, 125 on `-d 1e12`, and roughly 124,000 on the full count;
+- [`9484bbc`](../../commit/9484bbc) does act wherever the bucket path is taken,
+  but its 2.8% is measured where that regime is saturated. A full count sieves
+  most of its interval with far fewer bucket primes than at the limit — 300,409
+  at 10¹⁴ against 1,587,772 at 10¹⁵.
 
 All five counts reproduce the known values of the prime-counting function π(N).
 
