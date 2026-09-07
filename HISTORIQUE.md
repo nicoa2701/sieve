@@ -9,6 +9,53 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-07 — `f6435c1` · Plaque : elle reste allumée quand elle couvre √N
+
+Troisième et dernière retombée de la comparaison au crible frère. L'entrée
+`aa56b2c` avait fermé la plaque comme cause de l'écart de 3 % — à
+configuration égale il était intact — mais elle avait aussi noté, sans
+l'exploiter, que le crible frère gardait sa plaque à 10¹¹ et que la lui
+couper coûtait 9 ms (`-S 0` : 691 → 700 ms). Une fois les deux premiers
+correctifs posés, ces 9 ms étaient l'essentiel de ce qui restait.
+
+**La règle en cause.** La plaque s'éteignait dès que sa bande atteignait √N,
+au motif qu'elle vidait la bande directe : à 10¹¹, √N = 316 228 tient dans
+les 512 KiB de plaque, et le programme jugeait qu'un étage sans étage après
+lui ne servait plus. C'était confondre deux choses. La bande directe vide
+signifie qu'aucun premier n'a besoin du segment entier ; cela ne dit rien du
+coût pour les premiers de la plaque de passer *quand même* par le segment
+entier. Or c'est ce qu'ils faisaient une fois la plaque coupée : les 15 042
+premiers de ]131 071, 316 228] retombaient sur le segment de 1024 KiB, deux
+fois la part de L2 du thread — 16 threads sur 8 cœurs, 1 Mio de L2 par cœur.
+Ils marquaient 1024 KiB au lieu de 512.
+
+La règle est supprimée. Quand la bande directe est vide et que la plaque
+existe, le segment se dimensionne sur le L2 entier au lieu de L2/2 : **deux
+plaques par segment**, la disposition exacte du crible frère. Sans plaque le
+repli L2/2 reste tel quel. Le message `L2 slab: off (sqrt(N) <= plaque …)`
+du mode `-v` disparaît avec la règle ; le segment affiche `L2, chemin direct
+vide (plaque)`.
+
+```
+  temps, 10^11    707,3 ms -> 701,4 ms   -0,8 %   (5 passes ; crible frère 697,3)
+  temps, 2*10^11  1,517 s  -> 1,498 s    -1,3 %   (3 passes ; crible frère 1,492)
+```
+
+Médianes en A/B entrelacé, 9700X, 16 threads. À 10¹² et au-delà √N dépasse
+la plaque, la règle ne jouait pas, rien ne change. `-s 2048` n'apporte rien
+de plus : 704 ms.
+
+**Ce que ça laisse.** Après les trois correctifs du jour, 10¹¹ se joue à
+701 ms contre 697 pour le crible frère, sur les mêmes tours : l'écart de 3 à
+4 % est descendu sous 1 %, et ce qui reste est l'enveloppe de visite de
+`sweep_chunked` décrite dans l'entrée `7c3ddfc`. Toujours non tenté.
+
+Comptes identiques au crible frère sur 5·10¹⁰, 2·10¹¹, 2,7·10¹¹,
+[2,5·10¹¹, 2,51·10¹¹] et [1,72·10¹⁰, 1,73·10¹⁰]. `make check` 127/127,
+`make sanitize` sans trouvaille sur les deux variantes `SINK_TAIL`.
+
+---
+
 ## 2026-09-07 — `7c3ddfc` · Pré-crible : les quatre décalages avancent dans un ymm
 
 Suite directe de l'entrée ci-dessous. Une fois les tours dé-versionnés, il
