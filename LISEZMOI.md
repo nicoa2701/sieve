@@ -58,43 +58,52 @@ make sanitize           # ASan + UBSan, les deux variantes SINK_TAIL
 
 | | |
 |:--|:--|
-| **Commit** | [`5dbf4d5`](../../commit/5dbf4d5) — 10¹¹ à 10¹⁴ · [`d4b06ec`](../../commit/d4b06ec) — 10¹⁵ |
-| **Date** | 2026-09-03, 15:35 → 21:34 (UTC) |
+| **Commit** | [`e49cff4`](../../commit/e49cff4) — 10¹¹ à 10¹⁴ · [`d4b06ec`](../../commit/d4b06ec) — 10¹⁵ † |
+| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵ : 2026-09-03 |
 | **CPU** | AMD Ryzen 7 9700X — 8 cœurs / 16 threads |
 | **Threads utilisés** | 16 |
 
 
 | Borne | π(N) | Temps | Croissance / décade |
 |:--|--:|--:|--:|
-| 10¹¹ | 4 118 054 813 | 0,715 s | — |
-| 10¹² | 37 607 912 018 | 9,120 s | ×12,76 |
-| 10¹³ | 346 065 536 839 | 116,1 s | ×12,73 |
-| 10¹⁴ | 3 204 941 750 802 | 1 525,4 s | ×13,14 |
-| 10¹⁵ | 29 844 570 422 669 | 19 262,2 s | ×12,63 |
+| 10¹¹ | 4 118 054 813 | 0,697 s | — |
+| 10¹² | 37 607 912 018 | 8,792 s | ×12,62 |
+| 10¹³ | 346 065 536 839 | 113,6 s | ×12,92 |
+| 10¹⁴ | 3 204 941 750 802 | 1 521,8 s | ×13,40 |
+| 10¹⁵ † | 29 844 570 422 669 | 19 262,2 s | ×12,63 |
 
-Les cinq bornes sortent du même binaire : `ebc0de9` et `d4b06ec` ne touchent
-que la documentation, et le 10¹⁵ est parti dix minutes après la fin du 10¹⁴.
+† **10¹⁵ n'a pas été remesuré** — 5,4 h de banc. La ligne garde sa provenance
+du 2026-09-03, [`d4b06ec`](../../commit/d4b06ec), d'avant les trois correctifs
+du 2026-09-07 ; sa croissance se rapporte au 10¹⁴ de cette série-là
+(1 525,4 s), non à celui du tableau.
 
-Le facteur de croissance reste entre **×12,6 et ×13,1 par décade** sur les cinq
-bornes : un surcoût stable au-dessus du ×10 de la plage elle-même, sans
-décrochage quand la fenêtre de travail déborde chaque niveau de cache.
+Les quatre bornes remesurées sortent du même binaire, enchaînées de 17:03 à
+17:32.
 
-Les cinq bornes tombent à −1,0 %, +1,8 %, +0,4 %, −1,4 % et −0,9 % des valeurs
-de [`e29ec95`](../../commit/e29ec95) mesurées le 2026-08-29, sans signe
-constant : rien de distinguable du bruit. Les deux changements du criblage entre
-les deux commits ne se voient donc pas sur un comptage complet, **pas même
-celui qui va jusqu'à 10¹⁵**, et leur mécanisme le prévoit :
+Le facteur de croissance reste entre **×12,6 et ×13,4 par décade** sur les
+quatre bornes remesurées : un surcoût stable au-dessus du ×10 de la plage
+elle-même, sans décrochage quand la fenêtre de travail déborde chaque niveau de
+cache.
 
-- [`bdccb6f`](../../commit/bdccb6f) vaut 6,6 % sur une fenêtre de 10¹⁰ à 10¹⁵,
-  mais il n'agit que par un plancher sur la taille du chunk — 4 segments, à
-  cette borne. Dès que l'intervalle s'allonge, le découpage par défaut passe
-  au-dessus du plancher et celui-ci ne mord plus : 4 segments par chunk sur
-  `-d 1e10`, 13 sur `-d 1e11`, 125 sur `-d 1e12`, et environ 124 000 sur le
-  comptage complet ;
-- [`9484bbc`](../../commit/9484bbc), lui, agit partout où le chemin des seaux
-  passe, mais ses 2,8 % sont mesurés là où ce régime est saturé. Un comptage
-  complet crible l'essentiel de son intervalle avec beaucoup moins de premiers
-  à seau qu'à la borne — 300 409 à 10¹⁴ contre 1 587 772 à 10¹⁵.
+Les quatre bornes tombent à **−2,5 %, −3,6 %, −2,2 % et −0,2 %** des valeurs de
+[`5dbf4d5`](../../commit/5dbf4d5) mesurées le 2026-09-03. Trois correctifs du
+criblage séparent les deux commits, tous trois sortis d'une comparaison
+instruction par instruction avec un crible voisin :
+
+- [`aa56b2c`](../../commit/aa56b2c) retire un versionnage inutile des boucles
+  de tour — −15 % de branches, −1,4 % de temps à 10¹¹ ;
+- [`7c3ddfc`](../../commit/7c3ddfc) fait avancer les quatre décalages du
+  pré-crible dans un registre vectoriel — 18 instructions par pas au lieu de
+  30, −1,2 % à 10¹¹ ;
+- [`f6435c1`](../../commit/f6435c1) garde la plaque quand elle couvre √N —
+  −0,8 % à 10¹¹, et rien à 10¹² ni au-delà, où √N la dépasse.
+
+À 10¹¹ le tableau retrouve les −2,5 % de l'A/B entrelacé de la session. Aux
+deux bornes suivantes seuls les deux premiers correctifs jouent, et ils s'y
+voient. À 10¹⁴ le gain s'efface : 72 % de l'intervalle se crible en régime de
+seaux, dont le travail, que ni l'un ni l'autre ne touche, s'ajoute à celui des
+étages — et un passage unique de 25 minutes ne sépare pas −0,2 % d'un vrai
+−1 %.
 
 Les cinq comptages reproduisent les valeurs connues de la fonction de compte
 des premiers π(N).

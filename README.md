@@ -56,42 +56,49 @@ make sanitize           # ASan + UBSan, both SINK_TAIL variants
 
 | | |
 |:--|:--|
-| **Commit** | [`5dbf4d5`](../../commit/5dbf4d5) — 10¹¹ to 10¹⁴ · [`d4b06ec`](../../commit/d4b06ec) — 10¹⁵ |
-| **Date** | 2026-09-03, 15:35 → 21:34 (UTC) |
+| **Commit** | [`e49cff4`](../../commit/e49cff4) — 10¹¹ to 10¹⁴ · [`d4b06ec`](../../commit/d4b06ec) — 10¹⁵ † |
+| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵: 2026-09-03 |
 | **CPU** | AMD Ryzen 7 9700X — 8 cores / 16 threads |
 | **Threads used** | 16 |
 
 
 | Limit | π(N) | Time | Growth / decade |
 |:--|--:|--:|--:|
-| 10¹¹ | 4,118,054,813 | 0.715 s | — |
-| 10¹² | 37,607,912,018 | 9.120 s | ×12.76 |
-| 10¹³ | 346,065,536,839 | 116.1 s | ×12.73 |
-| 10¹⁴ | 3,204,941,750,802 | 1,525.4 s | ×13.14 |
-| 10¹⁵ | 29,844,570,422,669 | 19,262.2 s | ×12.63 |
+| 10¹¹ | 4,118,054,813 | 0.697 s | — |
+| 10¹² | 37,607,912,018 | 8.792 s | ×12.62 |
+| 10¹³ | 346,065,536,839 | 113.6 s | ×12.92 |
+| 10¹⁴ | 3,204,941,750,802 | 1,521.8 s | ×13.40 |
+| 10¹⁵ † | 29,844,570,422,669 | 19,262.2 s | ×12.63 |
 
-All five limits come from the same binary: `ebc0de9` and `d4b06ec` touch
-documentation only, and 10¹⁵ started ten minutes after 10¹⁴ finished.
+† **10¹⁵ was not re-measured** — 5.4 h of bench time. The row keeps its
+provenance of 2026-09-03, [`d4b06ec`](../../commit/d4b06ec), from before the
+three fixes of 2026-09-07; its growth refers to the 10¹⁴ of that series
+(1,525.4 s), not to the one in the table.
 
-The growth factor stays between **×12.6 and ×13.1 per decade** across all five
-limits: a stable overhead above the ×10 of the range itself, with no cliff as
-the working set outgrows each successive cache level.
+The four re-measured limits come from the same binary, run back to back from
+17:03 to 17:32.
 
-The five limits land at −1.0%, +1.8%, +0.4%, −1.4% and −0.9% of the
-[`e29ec95`](../../commit/e29ec95) figures measured on 2026-08-29, with no
-consistent sign: nothing distinguishable from noise. The two sieving changes
-between the two commits therefore do not show up on a full count, **not even the
-one that runs all the way to 10¹⁵**, and their mechanism predicts exactly that:
+The growth factor stays between **×12.6 and ×13.4 per decade** across the four
+re-measured limits: a stable overhead above the ×10 of the range itself, with
+no cliff as the working set outgrows each successive cache level.
 
-- [`bdccb6f`](../../commit/bdccb6f) is worth 6.6% on a 10¹⁰-wide window at 10¹⁵,
-  but all it does is impose a floor on chunk size — 4 segments, at that limit.
-  As soon as the interval gets longer the default split rises above the floor
-  and the floor stops binding: 4 segments per chunk on `-d 1e10`, 13 on
-  `-d 1e11`, 125 on `-d 1e12`, and roughly 124,000 on the full count;
-- [`9484bbc`](../../commit/9484bbc) does act wherever the bucket path is taken,
-  but its 2.8% is measured where that regime is saturated. A full count sieves
-  most of its interval with far fewer bucket primes than at the limit — 300,409
-  at 10¹⁴ against 1,587,772 at 10¹⁵.
+The four limits land at **−2.5%, −3.6%, −2.2% and −0.2%** of the
+[`5dbf4d5`](../../commit/5dbf4d5) figures measured on 2026-09-03. Three sieving
+fixes separate the two commits, all three found by an instruction-level
+comparison against a sibling sieve:
+
+- [`aa56b2c`](../../commit/aa56b2c) removes a useless versioning of the turn
+  loops — −15% branches, −1.4% time at 10¹¹;
+- [`7c3ddfc`](../../commit/7c3ddfc) advances the four presieve offsets in a
+  vector register — 18 instructions per step instead of 30, −1.2% at 10¹¹;
+- [`f6435c1`](../../commit/f6435c1) keeps the slab on when it covers √N —
+  −0.8% at 10¹¹, and nothing at 10¹² or beyond, where √N outgrows it.
+
+At 10¹¹ the table recovers the −2.5% of the session's interleaved A/B. At the
+next two limits only the first two fixes apply, and they show. At 10¹⁴ the
+gain fades: 72% of the interval is sieved in the bucket regime, whose work,
+untouched by either fix, comes on top of the stages' — and a single 25-minute
+pass cannot tell −0.2% from a real −1%.
 
 All five counts reproduce the known values of the prime-counting function π(N).
 
