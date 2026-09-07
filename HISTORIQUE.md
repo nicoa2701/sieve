@@ -9,6 +9,128 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-07 — `7c3ddfc` · Pré-crible : les quatre décalages avancent dans un ymm
+
+Suite directe de l'entrée ci-dessous. Une fois les tours dé-versionnés, il
+restait à 10¹¹ environ 2,2 G d'instructions d'écart avec le crible frère, et
+`perf report` les partageait en deux parts presque égales : 1,4 G dans
+l'enveloppe de visite de `sweep_chunked`, 1,2 G dans le corps de la région
+parallèle. La seconde part était la plus facile à nommer. Un `perf annotate`
+de `main._omp_fn.0`, découpé par fenêtre de 1 Kio de code, la mettait toute
+dans la boucle de remplissage du pré-crible : **52 % des instructions du corps
+parallèle contre 36 % en face**, pour des tables identiques — 27 premiers
+jusqu'à 113, 12 tables, 3 passes de 4, 67 KiB des deux côtés.
+
+**La boucle faisait 30 instructions par pas de 64 octets contre 18.** Le
+travail utile est le même : trois chargements de tables, deux `vpternlogd`,
+un chargement et une écriture du segment. Les douze de trop sont l'avance
+scalaire des quatre décalages modulo leur période — `add`, `mov`, `sub`,
+`cmp`, `cmov` pour chacun, vingt en tout — plus la borne de boucle relue
+depuis la pile. Le compte tombe juste : 10¹¹ fait 3,33 G d'octets, 52 M de
+pas par passe, 156 M sur trois passes ; à 30 instructions cela fait 4,7 G, à
+18 cela fait 2,8 G, exactement les deux valeurs que le profil attribuait à
+chaque programme.
+
+Sous AVX-512VL les quatre décalages vivent dans un `ymm` : `vpaddq`, puis
+`vpsubq` et `vpminuq` pour le retour en période, trois instructions pour les
+quatre ; l'extraction en scalaires pour former les adresses en coûte six. La
+boucle tombe à 18 instructions — celle que LLVM produit pour la même source
+en Rust, et que le crible frère avait déjà recopiée à la main. Le chemin
+scalaire reste tel quel sur les cibles sans VL.
+
+```
+  instructions, 10^11   65,71e9 -> 63,82e9   -2,9 %
+  cycles,       10^11   48,21e9 -> 47,78e9   -0,9 %
+  temps,        10^11    709 ms -> 701 ms    -1,2 %
+```
+
+`perf stat -r 3`. **Le gain en temps est le tiers du gain en instructions**,
+et c'est la leçon de l'entrée : l'IPC descend de 1,36 à 1,34. La boucle est
+en partie bornée par ses accès de 64 octets, et l'avance scalaire s'exécutait
+dans leur ombre, à moitié gratuite. Entrelacé sur cinq tours, 704 à 717 ms
+contre 720 à 726 ms avant ; le crible frère fait 694 à 711 ms sur les mêmes
+tours.
+
+**Ce que ça laisse.** Les deux binaires sont à 0,3 G d'instructions l'un de
+l'autre, mais à 0,56 G de branches et 0,9 G de cycles. Ce qui reste est
+l'enveloppe de visite de `sweep_chunked` — un `jmp` de retour vers la boucle
+par premier, trois `nopw` d'alignement traversés à chaque visite, la borne
+relue depuis la pile et un pointeur repris d'un registre vectoriel — et tient
+à la taille de la fonction, 20 000 lignes d'assembleur pour les cinq étages
+inlinés, contre 2 900 en face où les variantes sont hors ligne. Il n'y a plus
+rien de local à prendre ; le pas suivant serait de sortir les étages hors
+ligne. Non tenté.
+
+Comptes identiques sur sept bornes, dont une fenêtre à bornes quelconques.
+`make check` 127/127, `make sanitize` sans trouvaille sur les deux variantes
+`SINK_TAIL`.
+
+---
+
+## 2026-09-07 — `aa56b2c` · gcc n'a plus à versionner les tours pour p = 1
+
+Un crible frère hors dépôt — même roue 30, mêmes cinq étages, mêmes seaux
+jusqu'au code près, mais en pthreads et avec ses variantes de balayage hors
+ligne — rendait à 10¹¹ le même compte **3 à 4 % plus vite**, et gardait cet
+écart sur 10¹² et 10¹³. Sur les fenêtres à 10¹⁵ les deux étaient à égalité
+au bruit près, roue12 devant de 0,5 % sur [10¹⁵, +10¹²] après quatre
+lancements sans recouvrement. L'entrée note d'abord ce qui n'était pas la
+cause, parce que chaque hypothèse a été mesurée avant d'être fermée.
+
+- **Pas la plaque.** roue12 l'éteint à 10¹¹ parce que √N tient dedans, le
+  crible frère la garde. Gardée dans une copie, à segment forcé égal, même
+  temps à 2 ms près ; avec le segment de repli à 512 KiB, +3 %, que roue12
+  reproduit à l'identique avec `-s 512`. C'était le segment, pas la plaque.
+  À configuration strictement égale — mêmes étages, mêmes tailles, 15 042
+  premiers en plaque, zéro direct — l'écart de 3 % était intact.
+- **Pas libgomp.** 1,2 % des cycles dans le spin de fin de région, et
+  `OMP_WAIT_POLICY=passive` comme `GOMP_SPINCOUNT=0` ne bougent pas le temps,
+  ni à 10¹¹ ni sur [10¹⁵, +10¹⁰] où le crible frère revendique son gain
+  pthreads. Le temps CPU le confirme : 11,25 s contre 10,83 s, le même
+  rapport que les instructions. Du travail en plus, pas de l'attente.
+- **Pas la mémoire.** Les défauts L1d suivent le nombre d'instructions, et
+  les branches ratées sont égales.
+
+**Ce que perf stat disait** : 4,5 % d'instructions et **29 % de branches en
+plus** à IPC égal, 1,36 contre 1,35. Le désassemblage de `sweep_chunked`
+mettait ces branches dans l'enveloppe de chaque visite, la partie hors boucle
+de tour : **36 instructions et 6 branches contre 33 et 3**, les boucles de
+tour elles-mêmes étant identiques, huit `andb` puis `add`, `cmp`, saut. Parmi
+les trois branches en trop, une était un `cmpl $1` suivi d'un `jne` juste
+avant la boucle : gcc, ne sachant rien de `p`, versionne la boucle déroulée
+pour `p == 1`, avec `incq` au lieu d'`addq`, et la version morte n'a jamais
+reçu un échantillon. Le crible frère l'avait déjà vu et le disait dans un
+commentaire.
+
+`sweep_over` et `sweep_exact` déclarent maintenant `p >= 7` par
+`__builtin_unreachable`. La boucle de reprise et la queue, versionnées de la
+même façon, perdent leurs tests avec — d'où une baisse de branches plus
+grande que le seul test retiré.
+
+```
+  branches,     10^11    7,81e9 -> 6,60e9   -15,5 %
+  instructions, 10^11   66,28e9 -> 65,71e9   -0,9 %
+  temps,        10^11    719 ms -> 709 ms    -1,4 %
+  temps,        10^12   8,97 s  -> 8,83 s    -1,6 %
+  temps, [10^15, +10^11] 2,27 s -> 2,24 s    -1,3 %
+```
+
+`perf stat -r 3` pour la première ligne, plages sans recouvrement pour les
+autres. La même indication dans `sweep_exact_calc` a été essayée et ne change
+rien de mesurable, 0,1 G d'instructions : la bande directe ne porte que 48 M
+de visites sur 690 M à 10¹¹. Elle n'est pas ajoutée.
+
+**Le point de méthode.** Sur 690 M de visites, l'écart mesuré faisait 4
+instructions et 2,6 branches par visite ; le comptage à la main sur
+l'assembleur en donnait 3 et 3. C'est ce recoupement qui a permis de croire
+le désassemblage plutôt que les hypothèses structurelles, toutes plausibles
+et toutes fausses.
+
+Comptes identiques sur sept bornes. `make check` 127/127, `make sanitize`
+sans trouvaille.
+
+---
+
 ## 2026-09-04 — `87d4a49` · 10¹⁵ remesuré, et la vraie raison de son silence
 
 Le point resté ouvert de l'entrée ci-dessous est fermé : les 5,4 h de banc ont
