@@ -1045,6 +1045,9 @@ sweep_exact(uint8_t *bits,
             int64_t sink,
             const unsigned rc)
 {
+    if (p < 7)
+        __builtin_unreachable();
+
 #if RECOMPUTE_TURN
     uint32_t o_buf[8];
 
@@ -1422,6 +1425,9 @@ sweep_over(uint8_t *bits,
            int64_t to,
            const unsigned rc)
 {
+    if (p < 7)
+        __builtin_unreachable();
+
 #if RECOMPUTE_TURN
     uint32_t o_buf[8];
 
