@@ -9,6 +9,56 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-07 — `25e4a32` · Comptage complet remesuré après les trois correctifs
+
+Le tableau de la vitrine datait de `5dbf4d5`, donc d'avant les trois
+correctifs du jour — `aa56b2c`, `7c3ddfc`, `f6435c1`. Quatre bornes
+remesurées à `e49cff4`, un passage chacune, enchaînées de 17:03:42 à 17:31:52
+UTC sur le Ryzen 9700X, 16 threads :
+
+```
+  1e11       4 118 054 813      696,7 ms   segment 1024 KiB   -2,5 %
+  1e12      37 607 912 018       8,792 s   segment 2048 KiB   -3,6 %
+  1e13     346 065 536 839     113,572 s   segment 2048 KiB   -2,2 %
+  1e14   3 204 941 750 802   1 521,811 s   segment 2048 KiB   -0,2 %
+```
+
+Les quatre comptages sont ceux de π(N) ; les écarts sont pris sur les temps de
+`5dbf4d5` — 714,8 ms, 9,120 s, 116,118 s, 1 525,400 s.
+
+**Trois signes négatifs nets, puis rien.** À 10¹¹ le tableau retrouve les
+−2,5 % de l'A/B entrelacé de la session, 719 → 701 ms sur les mêmes tours que
+le crible frère : la remesure en série indépendante confirme la mesure en
+série entrelacée, à 0,6 % près (696,7 contre 701,4). À 10¹² et 10¹³ le
+correctif de la plaque ne joue plus — √N la dépasse — et les deux autres
+suffisent : −3,6 % et −2,2 %, là où `aa56b2c` seul donnait −1,6 % à 10¹².
+
+À 10¹⁴ il ne reste que −0,2 %, sous la bande d'un passage unique. Le
+mécanisme le laisse attendre sans le prouver : les deux correctifs qui
+restent en jeu agissent sur les boucles de tour des étages et sur le
+pré-crible, et 72 % de l'intervalle `[0, 10¹⁴]` se crible au-dessus du
+seuil des seaux, 2,75·10¹³, où le travail des seaux s'ajoute à celui des
+étages sans que l'un ni l'autre ne le touche. Ce que ce point ne dit pas,
+c'est si le gain à cette borne vaut 0 ou 1 % ; un passage de 25 minutes ne
+sépare pas les deux, et le trancher coûterait trois passages avec
+refroidissement, soit deux heures de banc. Non fait.
+
+**Croissance par décade** : ×12,62, ×12,92, ×13,40. La dernière monte de
+×13,14 parce que 10¹³ a gagné 2,2 % et 10¹⁴ presque rien ; la fourchette
+s'ouvre à ×12,6–×13,4 sur les quatre bornes remesurées.
+
+10¹⁵ n'a pas été remesuré : 5,4 h de banc. La ligne garde sa provenance
+`d4b06ec` dans le tableau, marquée d'une dague comme à `ebc0de9`, et sa
+croissance se rapporte au 10¹⁴ de sa propre série.
+
+Les limites de protocole sont celles de `ebc0de9` — passage unique, aucune
+référence primesieve entrelacée — donc ces quatre chiffres restent une mesure
+de vitrine et non de campagne. `MESURES.md` reste à C4, qui est antérieure
+aux trois correctifs et dont la comparaison à primesieve, la fenêtre de 10¹¹
+et l'ablation des étages sont à refaire.
+
+---
+
 ## 2026-09-07 — `f6435c1` · Plaque : elle reste allumée quand elle couvre √N
 
 Troisième et dernière retombée de la comparaison au crible frère. L'entrée
