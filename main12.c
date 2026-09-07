@@ -3221,14 +3221,13 @@ int main(int argc, char **argv)
             slab_bytes = 0;
     }
 
-    const char *slab_off = "";
-
-    if (slab_bytes && slab_end >= prime_count)
-    {
-        slab_bytes = 0;
-        slab_end   = chunk_end;
-        slab_off   = " (sqrt(N) <= plaque : elle vide la bande directe)";
-    }
+    /*
+       La plaque peut couvrir jusqu'a sqrt(N) : la bande directe est alors
+       vide, mais la plaque reste utile. L'eteindre renvoyait ses premiers
+       sur le segment entier, deux fois la part de L2 du thread : +1,5 % a
+       10^11 (707 ms contre 691 pour ddd_multi4 a plaque conservee, le
+       2026-09-07). Le segment se dimensionne alors sur le L2, plus bas.
+    */
 
     uint32_t p_slab = slab_bytes ? primes[slab_end - 1] : 0;
 
@@ -3251,8 +3250,18 @@ int main(int argc, char **argv)
             if (l2_kb >= MIN_SEGMENT_KB &&
                 l2_kb <= MAX_SEGMENT_KB)
             {
-                s = l2_kb * 1024ULL / 2;
-                segment_origin = "L2/2, chemin direct vide";
+                if (slab_bytes)
+                {
+                    /* la plaque vaut la part de L2 du thread : deux
+                       plaques par segment, comme ddd_multi4 */
+                    s = l2_kb * 1024ULL;
+                    segment_origin = "L2, chemin direct vide (plaque)";
+                }
+                else
+                {
+                    s = l2_kb * 1024ULL / 2;
+                    segment_origin = "L2/2, chemin direct vide";
+                }
             }
             else
             {
@@ -3957,7 +3966,7 @@ int main(int argc, char **argv)
     }
     else
     {
-        printf("L2 slab: off%s\n", slab_off);
+        printf("L2 slab: off\n");
     }
 
     if (bucket_bytes)
