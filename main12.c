@@ -518,10 +518,39 @@ static void presieve_fill(uint8_t *dst,
 
 #if defined(__AVX512F__)
 
+#if defined(__AVX512VL__)
+        /* Les quatre decalages dans un ymm : avance et retour en periode
+           en trois instructions vectorielles, extraction en scalaires pour
+           former les adresses. En scalaire, gcc emet add, mov, sub, cmp,
+           cmov par decalage : 20 instructions par pas contre 9. */
+        __m256i vo = _mm256_set_epi64x((long long)o3, (long long)o2,
+                                       (long long)o1, (long long)o0);
+        const __m256i vP  = _mm256_set_epi64x((long long)P3, (long long)P2,
+                                              (long long)P1, (long long)P0);
+        const __m256i v64 = _mm256_set1_epi64x(64);
+
+#define PRESIEVE_LOAD_OFFSETS                             \
+        {                                                 \
+            __m128i lo = _mm256_castsi256_si128(vo);      \
+            __m128i hi = _mm256_extracti128_si256(vo, 1); \
+            o0 = (uint64_t)_mm_cvtsi128_si64(lo);         \
+            o1 = (uint64_t)_mm_extract_epi64(lo, 1);      \
+            o2 = (uint64_t)_mm_cvtsi128_si64(hi);         \
+            o3 = (uint64_t)_mm_extract_epi64(hi, 1);      \
+        }
+#define PRESIEVE_STEP                                     \
+        vo = _mm256_add_epi64(vo, v64);                   \
+        vo = _mm256_min_epu64(vo, _mm256_sub_epi64(vo, vP));
+#else
+#define PRESIEVE_LOAD_OFFSETS
+#define PRESIEVE_STEP PRESIEVE_ADVANCE
+#endif
+
         if (t == 0)
         {
             for (uint64_t i = 0; i < n; i += 64)
             {
+                PRESIEVE_LOAD_OFFSETS
                 __m512i v = _mm512_loadu_si512(b0 + o0);
 
                 v = _mm512_and_si512(v, _mm512_loadu_si512(b1 + o1));
@@ -530,13 +559,14 @@ static void presieve_fill(uint8_t *dst,
 
                 _mm512_store_si512((__m512i *)(dst + i), v);
 
-                PRESIEVE_ADVANCE
+                PRESIEVE_STEP
             }
         }
         else
         {
             for (uint64_t i = 0; i < n; i += 64)
             {
+                PRESIEVE_LOAD_OFFSETS
                 __m512i v = _mm512_loadu_si512(b0 + o0);
 
                 v = _mm512_and_si512(v, _mm512_loadu_si512(b1 + o1));
@@ -549,9 +579,12 @@ static void presieve_fill(uint8_t *dst,
 
                 _mm512_store_si512((__m512i *)(dst + i), v);
 
-                PRESIEVE_ADVANCE
+                PRESIEVE_STEP
             }
         }
+
+#undef PRESIEVE_LOAD_OFFSETS
+#undef PRESIEVE_STEP
 
 #else
 
