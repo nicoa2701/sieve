@@ -9,6 +9,57 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-08 — `61cab56` · 10¹⁵ remesuré à son tour
+
+Le point laissé ouvert par l'entrée ci-dessous est fermé. `π(10¹⁵) =
+29 844 570 422 669` en **18 962,045 s**, 16 threads, segment 2048 KiB,
+lancé à 18:05:07 UTC le 2026-09-07 sur le Ryzen 9700X — 5 h 16 min
+d'horloge, rendu vers 23:21. Le binaire est celui des quatre bornes de
+17:03–17:32, bâti à 16:53 et jamais reconstruit ; sa section `.text` est
+identique à celle d'une reconstruction de `dde6aaa`, dont les trois commits
+depuis `f6435c1` ne touchent que la documentation.
+
+**La série complète à `e49cff4`**, toutes à 16 threads :
+
+```
+  1e11       4 118 054 813      696,7 ms   segment 1024 KiB   -2,5 %
+  1e12      37 607 912 018       8,792 s   segment 2048 KiB   -3,6 %
+  1e13     346 065 536 839     113,572 s   segment 2048 KiB   -2,2 %
+  1e14   3 204 941 750 802   1 521,811 s   segment 2048 KiB   -0,2 %
+  1e15  29 844 570 422 669  18 962,045 s   segment 2048 KiB   -1,6 %
+```
+
+Les écarts sont pris sur les temps de `5dbf4d5` — 714,8 ms, 9,120 s,
+116,118 s, 1 525,400 s, 19 262,178 s.
+
+**Ce que −1,6 % dit, et ne dit pas.** L'entrée ci-dessous laissait 10¹⁴
+entre 0 et −1 %, faute d'un protocole qui sépare les deux ; 10¹⁵ tombe à
+−1,6 % dans les mêmes conditions — un passage, aucun refroidissement face
+à la référence, qui date d'un autre jour. Le comptage précédent à cette
+borne avait donné −0,9 % entre deux binaires *identiques* (entrée `87d4a49`)
+: c'est la bande d'un passage de 5 heures, et −1,6 % n'en sort pas
+franchement. Le mécanisme le laisse attendre petit : à 10¹⁵, 97 % de
+l'intervalle se crible en régime de seaux, que les deux correctifs encore
+actifs ne touchent pas, et les 3 % du bas de l'intervalle ne peuvent pas
+rendre les 2 à 3 % qu'ils gagnent à 10¹² et 10¹³. Un signe négatif
+attendu, une amplitude que ce passage ne mesure pas. Rien à remesurer :
+trois passages avec refroidissement feraient 17 h de banc pour trancher
+entre −0,5 et −1,5 %.
+
+**Croissance par décade** : ×12,62, ×12,92, ×13,40, ×12,46. La dernière
+descend de ×12,63 parce que 10¹⁴ n'a presque rien gagné et 10¹⁵ un peu ; la
+fourchette passe à ×12,5–×13,4 sur les cinq bornes de la même série. Le
+tableau de la vitrine perd sa dague et sa provenance `d4b06ec` ; les cinq
+lignes sortent du même binaire.
+
+`MESURES.md` reste à C4. Le comptage complet n'en fait pas partie — le
+tableau de la vitrine est une mesure de vitrine, passage unique et sans
+référence primesieve entrelacée — et ce qui reste à refaire depuis les trois
+correctifs est toujours la comparaison à primesieve, la fenêtre de 10¹¹ et
+l'ablation des étages.
+
+---
+
 ## 2026-09-07 — `25e4a32` · Comptage complet remesuré après les trois correctifs
 
 Le tableau de la vitrine datait de `5dbf4d5`, donc d'avant les trois
