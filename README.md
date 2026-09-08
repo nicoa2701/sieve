@@ -23,7 +23,7 @@ $ ./roue12 1e12
 Found 37607912018 primes up to 1000000000000 using 16 threads, segment 2048 KiB in 8.961s
 ```
 
-> **π(10¹⁵) = 29,844,570,422,669** — counted in 5 h 21 min on a Ryzen 7 9700X.
+> **π(10¹⁵) = 29,844,570,422,669** — counted in 5 h 16 min on a Ryzen 7 9700X.
 
 ---
 
@@ -56,8 +56,8 @@ make sanitize           # ASan + UBSan, both SINK_TAIL variants
 
 | | |
 |:--|:--|
-| **Commit** | [`e49cff4`](../../commit/e49cff4) — 10¹¹ to 10¹⁴ · [`d4b06ec`](../../commit/d4b06ec) — 10¹⁵ † |
-| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵: 2026-09-03 |
+| **Commit** | [`e49cff4`](../../commit/e49cff4) |
+| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵: 18:05 → 23:21 |
 | **CPU** | AMD Ryzen 7 9700X — 8 cores / 16 threads |
 | **Threads used** | 16 |
 
@@ -68,21 +68,16 @@ make sanitize           # ASan + UBSan, both SINK_TAIL variants
 | 10¹² | 37,607,912,018 | 8.792 s | ×12.62 |
 | 10¹³ | 346,065,536,839 | 113.6 s | ×12.92 |
 | 10¹⁴ | 3,204,941,750,802 | 1,521.8 s | ×13.40 |
-| 10¹⁵ † | 29,844,570,422,669 | 19,262.2 s | ×12.63 |
+| 10¹⁵ | 29,844,570,422,669 | 18,962.0 s | ×12.46 |
 
-† **10¹⁵ was not re-measured** — 5.4 h of bench time. The row keeps its
-provenance of 2026-09-03, [`d4b06ec`](../../commit/d4b06ec), from before the
-three fixes of 2026-09-07; its growth refers to the 10¹⁴ of that series
-(1,525.4 s), not to the one in the table.
+The five limits come from the same binary: 10¹¹ to 10¹⁴ run back to back
+from 17:03 to 17:32, then 10¹⁵ from 18:05 to 23:21.
 
-The four re-measured limits come from the same binary, run back to back from
-17:03 to 17:32.
-
-The growth factor stays between **×12.6 and ×13.4 per decade** across the four
-re-measured limits: a stable overhead above the ×10 of the range itself, with
+The growth factor stays between **×12.5 and ×13.4 per decade** across the five
+limits: a stable overhead above the ×10 of the range itself, with
 no cliff as the working set outgrows each successive cache level.
 
-The four limits land at **−2.5%, −3.6%, −2.2% and −0.2%** of the
+The five limits land at **−2.5%, −3.6%, −2.2%, −0.2% and −1.6%** of the
 [`5dbf4d5`](../../commit/5dbf4d5) figures measured on 2026-09-03. Three sieving
 fixes separate the two commits, all three found by an instruction-level
 comparison against a sibling sieve:
@@ -98,7 +93,9 @@ At 10¹¹ the table recovers the −2.5% of the session's interleaved A/B. At th
 next two limits only the first two fixes apply, and they show. At 10¹⁴ the
 gain fades: 72% of the interval is sieved in the bucket regime, whose work,
 untouched by either fix, comes on top of the stages' — and a single 25-minute
-pass cannot tell −0.2% from a real −1%.
+pass cannot tell −0.2% from a real −1%. The −1.6% at 10¹⁵ says the same
+thing from the other side: one 5-hour pass, no cooldown against the reference,
+a figure inside the band of the two runs it compares.
 
 All five counts reproduce the known values of the prime-counting function π(N).
 

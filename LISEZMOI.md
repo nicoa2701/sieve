@@ -23,7 +23,7 @@ $ ./roue12 1e12
 Found 37607912018 primes up to 1000000000000 using 16 threads, segment 2048 KiB in 8.961s
 ```
 
-> **π(10¹⁵) = 29 844 570 422 669** — compté en 5 h 21 min sur un Ryzen 7 9700X.
+> **π(10¹⁵) = 29 844 570 422 669** — compté en 5 h 16 min sur un Ryzen 7 9700X.
 
 ---
 
@@ -58,8 +58,8 @@ make sanitize           # ASan + UBSan, les deux variantes SINK_TAIL
 
 | | |
 |:--|:--|
-| **Commit** | [`e49cff4`](../../commit/e49cff4) — 10¹¹ à 10¹⁴ · [`d4b06ec`](../../commit/d4b06ec) — 10¹⁵ † |
-| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵ : 2026-09-03 |
+| **Commit** | [`e49cff4`](../../commit/e49cff4) |
+| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵ : 18:05 → 23:21 |
 | **CPU** | AMD Ryzen 7 9700X — 8 cœurs / 16 threads |
 | **Threads utilisés** | 16 |
 
@@ -70,22 +70,17 @@ make sanitize           # ASan + UBSan, les deux variantes SINK_TAIL
 | 10¹² | 37 607 912 018 | 8,792 s | ×12,62 |
 | 10¹³ | 346 065 536 839 | 113,6 s | ×12,92 |
 | 10¹⁴ | 3 204 941 750 802 | 1 521,8 s | ×13,40 |
-| 10¹⁵ † | 29 844 570 422 669 | 19 262,2 s | ×12,63 |
+| 10¹⁵ | 29 844 570 422 669 | 18 962,0 s | ×12,46 |
 
-† **10¹⁵ n'a pas été remesuré** — 5,4 h de banc. La ligne garde sa provenance
-du 2026-09-03, [`d4b06ec`](../../commit/d4b06ec), d'avant les trois correctifs
-du 2026-09-07 ; sa croissance se rapporte au 10¹⁴ de cette série-là
-(1 525,4 s), non à celui du tableau.
+Les cinq bornes sortent du même binaire : 10¹¹ à 10¹⁴ enchaînées de 17:03 à
+17:32, puis 10¹⁵ de 18:05 à 23:21.
 
-Les quatre bornes remesurées sortent du même binaire, enchaînées de 17:03 à
-17:32.
-
-Le facteur de croissance reste entre **×12,6 et ×13,4 par décade** sur les
-quatre bornes remesurées : un surcoût stable au-dessus du ×10 de la plage
+Le facteur de croissance reste entre **×12,5 et ×13,4 par décade** sur les
+cinq bornes : un surcoût stable au-dessus du ×10 de la plage
 elle-même, sans décrochage quand la fenêtre de travail déborde chaque niveau de
 cache.
 
-Les quatre bornes tombent à **−2,5 %, −3,6 %, −2,2 % et −0,2 %** des valeurs de
+Les cinq bornes tombent à **−2,5 %, −3,6 %, −2,2 %, −0,2 % et −1,6 %** des valeurs de
 [`5dbf4d5`](../../commit/5dbf4d5) mesurées le 2026-09-03. Trois correctifs du
 criblage séparent les deux commits, tous trois sortis d'une comparaison
 instruction par instruction avec un crible voisin :
@@ -103,7 +98,9 @@ deux bornes suivantes seuls les deux premiers correctifs jouent, et ils s'y
 voient. À 10¹⁴ le gain s'efface : 72 % de l'intervalle se crible en régime de
 seaux, dont le travail, que ni l'un ni l'autre ne touche, s'ajoute à celui des
 étages — et un passage unique de 25 minutes ne sépare pas −0,2 % d'un vrai
-−1 %.
+−1 %. Le −1,6 % à 10¹⁵ dit la même chose par l'autre bout : un passage de
+5 heures, sans refroidissement face à la référence, un chiffre dans la bande
+des deux passages qu'il compare.
 
 Les cinq comptages reproduisent les valeurs connues de la fonction de compte
 des premiers π(N).
