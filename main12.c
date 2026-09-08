@@ -3,14 +3,16 @@
  *
  * 1) Un octet porte les 8 residus premiers a 30 ; index_to_number et
  *    wheel_count convertissent entre index de bit et entier.
- * 2) Cinq etages de balayage, choisis par la taille du tour p*29/30 :
+ * 2) Cinq etages de balayage, choisis par la taille du tour, p octets :
  *    bloc L1, tranche L2, plaque, bande directe, seaux.
  * 3) Seaux : un premier n'est parcouru que dans la fenetre ou il
- *    marque. Pas de roue 210 pretabule, anneau de blocs recycles.
+ *    marque. Marche roue 210 tabulee par classe de residu et non par
+ *    premier, anneau de blocs recycles.
  * 4) Pre-crible : les premiers <= 113 en tables periodiques fusionnees
  *    quatre par passe, AVX-512 intrinseque ou C vectorisable.
  * 5) Tailles deduites a l'execution des caches detectes ; le segment
- *    est amorti sur les 1/p de la bande du milieu.
+ *    est amorti sur les 1/p des premiers au-dela de la plaque, bande
+ *    du milieu et seaux confondus.
  */
 
 
@@ -932,14 +934,15 @@ static int sweep_bucketed(uint8_t *bits,
                 if (skip < left)
                 {
                     /* Reempilement fusionne dans la boucle plutot que par
-                       bucket_push. Chaque entree n'y raye qu'une fois — un
-                       premier a seau a un pas plus grand que la fenetre —
-                       donc la comptabilite pese autant que le marquage, et
-                       les cinq instructions economisees ici comptent : le
-                       bloc passe de 17 a 12 instructions, -2,4 % sur le
-                       programme entier, -2,8 % sur [10^15, +10^11].
-                       bucket_push reste la forme employee a l'activation,
-                       ou elle n'est appelee qu'une fois par premier. */
+                       bucket_push. Chaque entree n'y raye qu'une fois — au
+                       dimensionnement par defaut, un premier a seau a un
+                       pas plus grand que la fenetre — donc la comptabilite
+                       pese autant que le marquage, et les cinq instructions
+                       economisees ici comptent : le bloc passe de 17 a 12
+                       instructions, -2,4 % sur le programme entier, -2,8 %
+                       sur [10^15, +10^11]. bucket_push reste la forme
+                       employee a l'activation, ou elle n'est appelee qu'une
+                       fois par premier. */
                     bucket_entry_t **const s = cur + skip;
 
                     bucket_entry_t *e = *s;
@@ -2537,8 +2540,8 @@ static void usage(FILE *out, const char *prog)
             "  bande du milieu (-J la borne) et les seaux (-K). "
             "Chacun s'eteint a 0.\n"
             "  -s KiB  taille du bitset par thread\n"
-            "          (defaut : amorti sur les premiers de la bande "
-            "du milieu, plafonne au\n"
+            "          (defaut : amorti sur les premiers au-dela de "
+            "la plaque, plafonne au\n"
             "          L3 par thread — a un demi-L3 si la plaque est "
             "eteinte — et arrondi\n"
             "          a un multiple de bloc)\n"
@@ -2563,9 +2566,9 @@ static void usage(FILE *out, const char *prog)
             "  -S KiB  plaque : quatrieme etage, entre la tranche et "
             "le segment (0 pour\n"
             "          desactiver ; defaut : le L2 par thread). Elle "
-            "s'eteint d'elle-meme\n"
-            "          quand elle viderait la bande du milieu, et -v "
-            "le dit\n"
+            "reste allumee\n"
+            "          meme quand sa bande couvre racine(HAUT) et vide "
+            "la bande du milieu\n"
             "  -L N    bande de la plaque, en plaques : elle prend "
             "les premiers jusqu'a\n"
             "          N fois sa taille (defaut 1 ; l'elargir a ete "
@@ -3252,8 +3255,9 @@ int main(int argc, char **argv)
             {
                 if (slab_bytes)
                 {
-                    /* la plaque vaut la part de L2 du thread : deux
-                       plaques par segment, comme ddd_multi4 */
+                    /* la plaque vaut la part de L2 du thread : le
+                       segment en porte autant que de threads partageant
+                       ce L2, deux sur le 9700X, comme ddd_multi4 */
                     s = l2_kb * 1024ULL;
                     segment_origin = "L2, chemin direct vide (plaque)";
                 }
