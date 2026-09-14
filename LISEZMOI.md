@@ -23,7 +23,7 @@ $ ./roue12 1e12
 Found 37607912018 primes up to 1000000000000 using 16 threads, segment 2048 KiB in 8.961s
 ```
 
-> **π(10¹⁵) = 29 844 570 422 669** — compté en 5 h 16 min sur un Ryzen 7 9700X.
+> **π(10¹⁵) = 29 844 570 422 669** — compté en 5 h 12 min sur un Ryzen 7 9700X.
 
 ---
 
@@ -58,49 +58,50 @@ make sanitize           # ASan + UBSan, les deux variantes SINK_TAIL
 
 | | |
 |:--|:--|
-| **Commit** | [`e49cff4`](../../commit/e49cff4) |
-| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵ : 18:05 → 23:21 |
+| **Commit** | [`6818449`](../../commit/6818449) |
+| **Date** | 2026-09-14, 18:36 → 18:41 (UTC) — 10¹⁴ : 16:12 → 16:37 — 10¹⁵ : 10:50 → 16:02 |
 | **CPU** | AMD Ryzen 7 9700X — 8 cœurs / 16 threads |
 | **Threads utilisés** | 16 |
 
 
 | Borne | π(N) | Temps | Croissance / décade |
 |:--|--:|--:|--:|
-| 10¹¹ | 4 118 054 813 | 0,697 s | — |
-| 10¹² | 37 607 912 018 | 8,792 s | ×12,62 |
-| 10¹³ | 346 065 536 839 | 113,6 s | ×12,92 |
-| 10¹⁴ | 3 204 941 750 802 | 1 521,8 s | ×13,40 |
-| 10¹⁵ | 29 844 570 422 669 | 18 962,0 s | ×12,46 |
+| 10¹¹ | 4 118 054 813 | 0,698 s | — |
+| 10¹² | 37 607 912 018 | 8,794 s | ×12,60 |
+| 10¹³ | 346 065 536 839 | 113,0 s | ×12,85 |
+| 10¹⁴ | 3 204 941 750 802 | 1 507,7 s | ×13,35 |
+| 10¹⁵ | 29 844 570 422 669 | 18 709,5 s | ×12,41 |
 
-Les cinq bornes sortent du même binaire : 10¹¹ à 10¹⁴ enchaînées de 17:03 à
-17:32, puis 10¹⁵ de 18:05 à 23:21.
+Les cinq bornes sortent du même binaire, qui porte le code de
+[`6818449`](../../commit/6818449) — les commits suivants ne touchent que la
+documentation : 10¹⁵ de 10:50 à 16:02, 10¹⁴ de 16:12 à 16:37, puis 10¹³ à
+10¹¹ enchaînées de 18:36 à 18:41.
 
-Le facteur de croissance reste entre **×12,5 et ×13,4 par décade** sur les
+Le facteur de croissance reste entre **×12,4 et ×13,4 par décade** sur les
 cinq bornes : un surcoût stable au-dessus du ×10 de la plage
 elle-même, sans décrochage quand la fenêtre de travail déborde chaque niveau de
 cache.
 
-Les cinq bornes tombent à **−2,5 %, −3,6 %, −2,2 %, −0,2 % et −1,6 %** des valeurs de
-[`5dbf4d5`](../../commit/5dbf4d5) mesurées le 2026-09-03. Trois correctifs du
-criblage séparent les deux commits, tous trois sortis d'une comparaison
-instruction par instruction avec un crible voisin :
+Les cinq bornes tombent à **+0,1 %, +0,0 %, −0,5 %, −0,9 % et −1,3 %** des
+valeurs de [`e49cff4`](../../commit/e49cff4) mesurées le 2026-09-07. Un seul
+changement sépare les deux : [`6818449`](../../commit/6818449) fait d'une
+entrée de seau un test au lieu d'une boucle quand son pas de roue couvre la
+fenêtre, puisqu'elle ne peut alors marquer qu'une fois — −1,3 % sur la fenêtre
+[10¹⁵, +10¹²] mesurée en alternance.
 
-- [`aa56b2c`](../../commit/aa56b2c) retire un versionnage inutile des boucles
-  de tour — −15 % de branches, −1,4 % de temps à 10¹¹ ;
-- [`7c3ddfc`](../../commit/7c3ddfc) fait avancer les quatre décalages du
-  pré-crible dans un registre vectoriel — 18 instructions par pas au lieu de
-  30, −1,2 % à 10¹¹ ;
-- [`f6435c1`](../../commit/f6435c1) garde la plaque quand elle couvre √N —
-  −0,8 % à 10¹¹, et rien à 10¹² ni au-delà, où √N la dépasse.
+Il n'agit que sur les premiers rangés dans les seaux, au-delà de 5 242 880
+avec un segment de 2048 KiB, donc à partir de 2,75·10¹³ environ. 10¹¹ et 10¹²
+retombent sur leurs valeurs ; à 10¹³, où le changement ne sert pas, −0,5 % est
+la bande d'un passage. Au-delà, le gain suit la part de l'intervalle criblée
+en régime de seaux : 72 % à 10¹⁴, 97 % à 10¹⁵. Trois passages du même code à
+10¹⁵ font en moyenne 18 781,4 s, −0,95 % de `e49cff4`, sur une étendue de
+0,94 % — un passage de l'un ou l'autre commit ne fixe pas l'amplitude.
 
-À 10¹¹ le tableau retrouve les −2,5 % de l'A/B entrelacé de la session. Aux
-deux bornes suivantes seuls les deux premiers correctifs jouent, et ils s'y
-voient. À 10¹⁴ le gain s'efface : 72 % de l'intervalle se crible en régime de
-seaux, dont le travail, que ni l'un ni l'autre ne touche, s'ajoute à celui des
-étages — et un passage unique de 25 minutes ne sépare pas −0,2 % d'un vrai
-−1 %. Le −1,6 % à 10¹⁵ dit la même chose par l'autre bout : un passage de
-5 heures, sans refroidissement face à la référence, un chiffre dans la bande
-des deux passages qu'il compare.
+Face aux valeurs de [`5dbf4d5`](../../commit/5dbf4d5) du 2026-09-03, avant
+les trois correctifs du criblage du 2026-09-07
+([`aa56b2c`](../../commit/aa56b2c), [`7c3ddfc`](../../commit/7c3ddfc),
+[`f6435c1`](../../commit/f6435c1)), les cinq bornes sont à −2,4 %, −3,6 %,
+−2,7 %, −1,2 % et −2,9 %.
 
 Les cinq comptages reproduisent les valeurs connues de la fonction de compte
 des premiers π(N).
@@ -124,8 +125,8 @@ fréquence soutenue et au refroidissement. Le protocole complet, et la campagne
 courante avec l'ablation de chaque étage à trois bornes, sont dans
 [`MESURES.md`](MESURES.md).
 
-Le tableau ci-dessus est un passage unique par borne, enchaînés sans
-refroidissement — ce qu'une mesure de 116 s ou de 1 525 s tolère bien mieux
+Le tableau ci-dessus est un passage unique par borne, sans refroidissement
+systématique — ce qu'une mesure de 113 s ou de 1 508 s tolère bien mieux
 qu'une mesure de quelques centaines de millisecondes, où la campagne relève
 jusqu'à 10 % d'écart entre séries indépendantes.
 

@@ -23,7 +23,7 @@ $ ./roue12 1e12
 Found 37607912018 primes up to 1000000000000 using 16 threads, segment 2048 KiB in 8.961s
 ```
 
-> **π(10¹⁵) = 29,844,570,422,669** — counted in 5 h 16 min on a Ryzen 7 9700X.
+> **π(10¹⁵) = 29,844,570,422,669** — counted in 5 h 12 min on a Ryzen 7 9700X.
 
 ---
 
@@ -56,46 +56,47 @@ make sanitize           # ASan + UBSan, both SINK_TAIL variants
 
 | | |
 |:--|:--|
-| **Commit** | [`e49cff4`](../../commit/e49cff4) |
-| **Date** | 2026-09-07, 17:03 → 17:32 (UTC) — 10¹⁵: 18:05 → 23:21 |
+| **Commit** | [`6818449`](../../commit/6818449) |
+| **Date** | 2026-09-14, 18:36 → 18:41 (UTC) — 10¹⁴: 16:12 → 16:37 — 10¹⁵: 10:50 → 16:02 |
 | **CPU** | AMD Ryzen 7 9700X — 8 cores / 16 threads |
 | **Threads used** | 16 |
 
 
 | Limit | π(N) | Time | Growth / decade |
 |:--|--:|--:|--:|
-| 10¹¹ | 4,118,054,813 | 0.697 s | — |
-| 10¹² | 37,607,912,018 | 8.792 s | ×12.62 |
-| 10¹³ | 346,065,536,839 | 113.6 s | ×12.92 |
-| 10¹⁴ | 3,204,941,750,802 | 1,521.8 s | ×13.40 |
-| 10¹⁵ | 29,844,570,422,669 | 18,962.0 s | ×12.46 |
+| 10¹¹ | 4,118,054,813 | 0.698 s | — |
+| 10¹² | 37,607,912,018 | 8.794 s | ×12.60 |
+| 10¹³ | 346,065,536,839 | 113.0 s | ×12.85 |
+| 10¹⁴ | 3,204,941,750,802 | 1,507.7 s | ×13.35 |
+| 10¹⁵ | 29,844,570,422,669 | 18,709.5 s | ×12.41 |
 
-The five limits come from the same binary: 10¹¹ to 10¹⁴ run back to back
-from 17:03 to 17:32, then 10¹⁵ from 18:05 to 23:21.
+The five limits come from the same binary, which carries the code of
+[`6818449`](../../commit/6818449) — the later commits only touch the
+documentation: 10¹⁵ from 10:50 to 16:02, 10¹⁴ from 16:12 to 16:37, then 10¹³
+to 10¹¹ back to back from 18:36 to 18:41.
 
-The growth factor stays between **×12.5 and ×13.4 per decade** across the five
+The growth factor stays between **×12.4 and ×13.4 per decade** across the five
 limits: a stable overhead above the ×10 of the range itself, with
 no cliff as the working set outgrows each successive cache level.
 
-The five limits land at **−2.5%, −3.6%, −2.2%, −0.2% and −1.6%** of the
-[`5dbf4d5`](../../commit/5dbf4d5) figures measured on 2026-09-03. Three sieving
-fixes separate the two commits, all three found by an instruction-level
-comparison against a sibling sieve:
+The five limits land at **+0.1%, +0.0%, −0.5%, −0.9% and −1.3%** of the
+[`e49cff4`](../../commit/e49cff4) figures measured on 2026-09-07. One change
+separates the two: [`6818449`](../../commit/6818449) makes a bucket entry test
+once instead of looping when its wheel step covers the window, since it can
+then mark at most once — −1.3% on the interleaved [10¹⁵, +10¹²] window.
 
-- [`aa56b2c`](../../commit/aa56b2c) removes a useless versioning of the turn
-  loops — −15% branches, −1.4% time at 10¹¹;
-- [`7c3ddfc`](../../commit/7c3ddfc) advances the four presieve offsets in a
-  vector register — 18 instructions per step instead of 30, −1.2% at 10¹¹;
-- [`f6435c1`](../../commit/f6435c1) keeps the slab on when it covers √N —
-  −0.8% at 10¹¹, and nothing at 10¹² or beyond, where √N outgrows it.
+It only acts on primes routed to the buckets, above 5,242,880 with a 2048 KiB
+segment, so from about 2.75·10¹³ on. 10¹¹ and 10¹² land on their previous
+figures; at 10¹³, where the change does not run, −0.5% is the band of a single
+pass. Beyond, the gain follows the share of the interval sieved in the bucket
+regime: 72% at 10¹⁴, 97% at 10¹⁵. Three passes of the same code at 10¹⁵
+average 18,781.4 s, −0.95% of `e49cff4`, spread over 0.94% — one pass of
+either commit does not settle the amplitude.
 
-At 10¹¹ the table recovers the −2.5% of the session's interleaved A/B. At the
-next two limits only the first two fixes apply, and they show. At 10¹⁴ the
-gain fades: 72% of the interval is sieved in the bucket regime, whose work,
-untouched by either fix, comes on top of the stages' — and a single 25-minute
-pass cannot tell −0.2% from a real −1%. The −1.6% at 10¹⁵ says the same
-thing from the other side: one 5-hour pass, no cooldown against the reference,
-a figure inside the band of the two runs it compares.
+Against the [`5dbf4d5`](../../commit/5dbf4d5) figures of 2026-09-03, before the
+three sieving fixes of 2026-09-07 ([`aa56b2c`](../../commit/aa56b2c),
+[`7c3ddfc`](../../commit/7c3ddfc), [`f6435c1`](../../commit/f6435c1)), the
+five limits stand at −2.4%, −3.6%, −2.7%, −1.2% and −2.9%.
 
 All five counts reproduce the known values of the prime-counting function π(N).
 
@@ -116,8 +117,8 @@ Long runs such as 10¹⁴ and 10¹⁵ are especially sensitive to sustained CPU
 frequency and cooling. The full protocol, and the current campaign with its
 ablation of every stage at three limits, are in [`MESURES.md`](MESURES.md).
 
-The table above is a single pass per limit, run back to back with no cooldown —
-which a 116 s or 1,525 s measurement tolerates far better than a few-hundred-
+The table above is a single pass per limit, with no systematic cooldown —
+which a 113 s or 1,508 s measurement tolerates far better than a few-hundred-
 millisecond one, where the campaign records up to 10% spread between
 independent series.
 
