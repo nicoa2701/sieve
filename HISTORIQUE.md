@@ -9,6 +9,53 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-14 — `65ee584` · Comptage complet remesuré après la marque unique
+
+Le tableau de la vitrine datait de `e49cff4`. Les cinq bornes sont remesurées
+avec le binaire reconstruit à 10:49:24 UTC, dont la section `.text` est celle
+de `6818449` — les commits suivants ne touchent que la documentation. Un
+passage chacune, lancé à la main, 16 threads, Ryzen 9700X :
+
+```
+  1e11       4 118 054 813      697,7 ms   segment 1024 KiB   +0,1 %   18:40:57
+  1e12      37 607 912 018       8,794 s   segment 2048 KiB   +0,0 %   18:38:58
+  1e13     346 065 536 839     112,959 s   segment 2048 KiB   -0,5 %   18:36:42
+  1e14   3 204 941 750 802   1 507,679 s   segment 2048 KiB   -0,9 %   16:11:54
+  1e15  29 844 570 422 669  18 709,518 s   segment 2048 KiB   -1,3 %   10:50:09
+```
+
+Les écarts sont pris sur les temps de `e49cff4` — 696,7 ms, 8,792 s,
+113,572 s, 1 521,811 s, 18 962,045 s. Les cinq comptages sont ceux de π(N).
+
+**Le changement ne sert qu'au-delà de 2,75·10¹³.** Un premier passe par les
+seaux s'il dépasse `p_bucket`, 2,5 segments, soit 2 621 440 à 1024 KiB et
+5 242 880 à 2048 KiB. À 10¹¹, 10¹² et 10¹³, √N reste en dessous, aucun premier
+n'y entre et le vidage modifié ne tourne pas. 10¹¹ et 10¹² retombent sur
+`e49cff4` à 0,1 % près. Le −0,5 % de 10¹³ ne peut donc rien devoir au
+changement : c'est la bande d'un passage à cette borne, et elle donne l'ordre
+de grandeur des deux suivantes.
+
+**Au-delà, le gain suit la part de l'intervalle en régime de seaux** : −0,9 %
+à 10¹⁴, où elle vaut 72 %, et −1,3 % à 10¹⁵, où elle vaut 97 %. L'ordre est
+celui qu'on attend, mais chaque borne n'a qu'un passage face à une référence
+qui n'en a qu'un. À 10¹⁵, les trois passages du même code (entrée
+ci-dessous) font 18 781,4 s en moyenne, −0,95 % de `e49cff4`, sur une étendue
+de 0,94 % ; la vitrine donne le passage de la série et cite la moyenne pour
+l'amplitude. 10¹⁴ n'a pas de second passage.
+
+**Croissance par décade** : ×12,60, ×12,85, ×13,35, ×12,41. La dernière
+descend de ×12,46 parce que 10¹⁵ gagne plus que 10¹⁴ ; la fourchette passe à
+×12,4–×13,4.
+
+Face à `5dbf4d5` (2026-09-03), avant les trois correctifs du 7 septembre, les
+cinq bornes sont à −2,4 %, −3,6 %, −2,7 %, −1,2 % et −2,9 %. La vitrine réduit
+à cette ligne et aux trois liens la liste des correctifs, qui reste détaillée
+dans leurs entrées.
+
+`MESURES.md` reste à C4.
+
+---
+
 ## 2026-09-14 — `6818449` · 10¹⁵ remesuré une troisième fois : le gain revient vers −1 %
 
 L'entrée ci-dessous concluait, sur deux passages du même code machine, que le
