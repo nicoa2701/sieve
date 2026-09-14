@@ -9,6 +9,92 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-14 — `6818449` · Seaux : une seule marque par entrée quand le pas couvre la fenêtre
+
+**Le mécanisme.** Un premier à seau `p = 30k + r` avance, entre deux marques,
+de `k·dR + dT` octets, où `dR` est l'écart entre deux résidus consécutifs de la
+roue 210 (au moins 2) et `dT ≥ 0`. Son pas vaut donc au moins `2k`. Trois
+invariants déjà présents font le reste :
+
+- une entrée tirée de la fente 0 a `idx < win` : l'activation comme le
+  réempilement rangent la position modulo la fenêtre ;
+- le segment est un multiple de la fenêtre, donc `end == win` à chaque tour ;
+- les premiers rangés dans les seaux vérifient `p > p_bucket`.
+
+Quand `2·⌊p_bucket/30⌋ ≥ win`, la boucle `while (idx < end)` du vidage ne
+tourne donc jamais plus d'une fois : elle devient un test. C'est le cas pour
+tout `-J ≥ 15`, la borne étant exacte (`p_bucket = 15·win` donne
+`2·(win/2) = win`), et pour le `-J` automatique dès que le segment compte au
+moins six fenêtres (`2,5·segment / 15 ≥ win`). En deçà — `-J` bas, ou `-s 128`
+avec la fenêtre de 128 KiB, où `p > 327 680` n'avance que de 21 KiB — la
+boucle reste. La position dans la fenêtre est prise par masque,
+`idx & (win − 1)`, au lieu de `idx − (skip << shift)`.
+
+**Le vidage est compilé deux fois.** `sweep_bucketed_run` est `always_inline`
+et reçoit `one` en constante ; `sweep_bucketed` lit `r->one` une fois par appel
+et choisit la copie. La première version testait `r->one` à chaque entrée et
+ne gagnait rien : trois passages alternés à [10¹⁵, +10¹²] donnaient 20,749,
+20,751 et 20,747 s pour la référence contre 20,809, 20,715 et 20,818 s.
+
+**D'où vient le changement.** Il sort d'une série de variantes de la boucle
+des seaux, essayées le 13 septembre hors dépôt. Seules la marque unique et le
+masque ont gagné ensemble : −15 % d'instructions dans les seaux, et 100,4 →
+94,1 s CPU dans les seaux à [10¹⁵, +10¹²]. Écartés le même jour : retirer le
+préchargement (+10 % sur les seaux), tenir le pointeur de seau en registre
+avec une lecture leurre (+20 à +60 %), un anneau circulaire à la place du
+`memmove` (+5 à +7 %), et les fenêtres de 16, 32, 64 et 256 KiB (128 reste
+l'optimum en temps réel).
+
+**Mesures sur fenêtre**, 16 threads, référence `c28174e`, trois passages
+alternés :
+
+```
+  [1e15, +1e12]         20,87 s -> 20,61 s   -1,3 %   28 952 450 479 premiers
+  [1e16 - 1e12, 1e16]   25,92 s -> 25,85 s   -0,3 %   27 143 458 517 premiers
+```
+
+À 10¹⁶, les passages valent 25,938, 25,886 et 25,942 s pour la référence,
+25,874, 25,796 et 25,883 s pour le changement : les deux séries se séparent
+de 3 ms. Les seaux y gagnent 4 %, mais ils pèsent 42 % du CPU et les autres
+étages en reprennent une partie. primesieve C fait la même fenêtre en
+28,21 s. Les passages individuels de la fenêtre de 10¹⁵ n'ont pas été
+conservés, seules les moyennes.
+
+**Comptage complet 0 → 10¹⁵**, un passage chacun, sans perf, machine
+inoccupée, 16 threads, segment 2048 KiB. Les deux derniers binaires ont la
+même section `.text` :
+
+```
+  e49cff4 (vitrine)         2026-09-07         18 962,0 s
+  c28174e (référence)       2026-09-13         18 976,2 s   user 299 596 s
+  c28174e + changement      2026-09-13         18 748,4 s   user 295 512 s
+  6818449                   2026-09-14 04:33   18 886,2 s   user 297 930 s
+```
+
+Les quatre comptes valent π(10¹⁵).
+
+**Le −1,2 % du message de commit ne tient pas.** Il vient du passage du
+13 septembre, et le même code machine remesuré le lendemain perd 0,73 % :
+c'est la largeur de la bande d'un passage de 5 heures. L'entrée `87d4a49`
+l'avait déjà vue, avec −0,9 % entre deux binaires identiques. Rapporté aux
+deux références, `6818449` donne −0,47 % contre `c28174e` et −0,40 % contre
+`e49cff4`. Le signe est attendu — 97 % de l'intervalle se crible en régime
+de seaux — mais l'amplitude sur un comptage complet n'est pas résolue ; la
+fenêtre [10¹⁵, +10¹²] alternée reste la mesure du gain.
+
+**Validation.** Comptes identiques à `c28174e` sur 0 → 10¹¹ (où les premiers
+s'activent en plein segment), [10¹³, +10¹⁰], [10¹⁵, +2·10⁹] et
+[10¹⁶ − 10⁹, 10¹⁶], avec le défaut, `-J 1`, `-J 14`, `-J 15`, `-s 128`,
+`-s 32`, `-K 1`, `-K 1 -J 15`, `-s 8192 -K 8192`, `-c 1` et `-t 1 -s 256` :
+44 cas, aucun écart. `make check` 127/127. `make sanitize` sans trouvaille,
+plus `-J 14`, `-J 15`, `-s 128` et `-K 1` sous sanitizer. `-Werror` sans
+avertissement sous gcc 15 et clang 21, `check.sh` 127/127 pour chacun.
+
+La vitrine garde les 18 962 s de `e49cff4` : le nouveau passage tombe dans la
+bande. `MESURES.md` reste à C4.
+
+---
+
 ## 2026-09-08 — `61cab56` · 10¹⁵ remesuré à son tour
 
 Le point laissé ouvert par l'entrée ci-dessous est fermé. `π(10¹⁵) =
