@@ -9,6 +9,46 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-09-14 — `6818449` · 10¹⁵ remesuré une troisième fois : le gain revient vers −1 %
+
+L'entrée ci-dessous concluait, sur deux passages du même code machine, que le
+−1,2 % du message de `6818449` ne tenait pas et que le gain sur le comptage
+complet valait plutôt −0,4 à −0,5 %. Un troisième passage la contredit.
+
+Lancé à la main à 10:50:09 UTC, `HEAD` à `e6a8ab7`, rendu à 16:01:58 :
+`π(10¹⁵) = 29 844 570 422 669` en **18 709,518 s**, 16 threads, segment
+2048 KiB. Le binaire a été reconstruit à 10:49:24 ; sa section `.text` est
+identique à celle des deux passages précédents, les commits depuis `6818449`
+ne touchant que la documentation.
+
+```
+  c28174e (référence)       2026-09-13         18 976,2 s
+  c28174e + changement      2026-09-13         18 748,4 s   -1,20 %
+  6818449                   2026-09-14 04:33   18 886,2 s   -0,47 %
+  6818449                   2026-09-14 10:50   18 709,5 s   -1,41 %
+
+  moyenne des trois         18 781,4 s   -1,03 %   (-0,95 % contre e49cff4)
+  étendue                      176,6 s    0,94 %
+```
+
+**Ce qui change.** Le passage de 04:33 est le plus lent des trois ; les deux
+autres ne s'écartent que de 0,21 %. Sa cause n'est pas identifiée, et rien ne
+permet de l'écarter : il reste dans la moyenne. Le gain sur le comptage
+complet est donc de l'ordre de −1 %, et l'entrée ci-dessous en tirait −0,4 %
+en prenant un passage pour la mesure. C'est la même erreur qu'elle reprochait
+au message de commit, dans l'autre sens. Le −1 % rejoint le −1,3 % de la
+fenêtre alternée [10¹⁵, +10¹²], ce que le mécanisme laisse attendre à une
+borne où 97 % de l'intervalle se crible en régime de seaux.
+
+**Ce qui ne change pas.** L'étendue de trois passages du même code vaut
+0,94 %, et les deux références n'ont qu'un passage chacune : l'amplitude reste
+connue à ±0,5 % près, et un seul passage ne tranche rien à cette borne. La
+fenêtre [10¹⁵, +10¹²] alternée reste la mesure du gain.
+
+La vitrine garde les 18 962 s de `e49cff4`. `MESURES.md` reste à C4.
+
+---
+
 ## 2026-09-14 — `6818449` · Seaux : une seule marque par entrée quand le pas couvre la fenêtre
 
 **Le mécanisme.** Un premier à seau `p = 30k + r` avance, entre deux marques,
