@@ -662,6 +662,7 @@ typedef struct
     uint64_t  slots;
     uint64_t  win;
     unsigned  shift;
+    int       one;
 } bucket_ring_t;
 
 
@@ -868,12 +869,13 @@ static int g_prefetch = PREFETCH_DEFAUT;
  * arretee, marque tant qu'elle reste dans la fenetre, puis est reclassee dans
  * celle ou elle retombe. L'anneau tourne d'un cran par fenetre.
  */
-__attribute__((noinline))
-static int sweep_bucketed(uint8_t *bits,
-                          uint64_t segment_bytes,
-                          bucket_ring_t *r,
-                          uint64_t gw0,
-                          uint64_t chunk_windows)
+__attribute__((always_inline))
+static inline int sweep_bucketed_run(uint8_t *bits,
+                                     uint64_t segment_bytes,
+                                     bucket_ring_t *r,
+                                     uint64_t gw0,
+                                     uint64_t chunk_windows,
+                                     const int one)
 {
     const uint64_t win   = r->win;
     const unsigned shift = r->shift;
@@ -918,14 +920,33 @@ static int sweep_bucketed(uint8_t *bits,
             uint64_t idx = ent->at >> 9;
             uint32_t wi  = ent->at & 511;
 
-            while (idx < end)
+            /* Quand le plus petit pas de la roue 210 atteint la fenetre,
+               une entree marque au plus une fois : un test au lieu d'une
+               boucle, -15 % d'instructions dans les seaux et -6 % de leur
+               temps a [10^15, +10^12]. La boucle reste pour un -J bas. */
+            if (one)
             {
-                const wheel_step_t st = wheel210_step[wi];
+                if (idx < end)
+                {
+                    const wheel_step_t st = wheel210_step[wi];
 
-                w[idx] &= st.mask;
+                    w[idx] &= st.mask;
 
-                idx += (uint64_t)k * st.dR + st.dT;
-                wi   = st.next;
+                    idx += (uint64_t)k * st.dR + st.dT;
+                    wi   = st.next;
+                }
+            }
+            else
+            {
+                while (idx < end)
+                {
+                    const wheel_step_t st = wheel210_step[wi];
+
+                    w[idx] &= st.mask;
+
+                    idx += (uint64_t)k * st.dR + st.dT;
+                    wi   = st.next;
+                }
             }
 
             {
@@ -956,7 +977,7 @@ static int sweep_bucketed(uint8_t *bits,
                     }
 
                     e->k  = k;
-                    e->at = (uint32_t)(((idx - (skip << shift)) << 9) | wi);
+                    e->at = (uint32_t)(((idx & (win - 1)) << 9) | wi);
 
                     *s = e + 1;
                 }
@@ -997,6 +1018,21 @@ static int sweep_bucketed(uint8_t *bits,
 
     return 1;
 }
+
+/* Deux copies du vidage, marque unique ou boucle : un test par entree sur
+   r->one suffit a annuler le gain de la marque unique. */
+__attribute__((noinline))
+static int sweep_bucketed(uint8_t *bits,
+                          uint64_t segment_bytes,
+                          bucket_ring_t *r,
+                          uint64_t gw0,
+                          uint64_t chunk_windows)
+{
+    return r->one
+        ? sweep_bucketed_run(bits, segment_bytes, r, gw0, chunk_windows, 1)
+        : sweep_bucketed_run(bits, segment_bytes, r, gw0, chunk_windows, 0);
+}
+
 
 /*
  * Place le curseur sur le premier multiple de p qui soit a la fois >= low et
@@ -3663,6 +3699,10 @@ int main(int argc, char **argv)
         ring.slots = ring_slots;
         ring.win   = bucket_bytes;
         ring.shift = bucket_shift;
+
+        /* Deux residus consecutifs de la roue 210 sont distants d'au moins
+           2 : le pas d'un premier a seau vaut au moins 2 * (p / 30) octets. */
+        ring.one   = 2 * (uint64_t)(p_bucket / 30) >= bucket_bytes;
 
         if (bucket_bytes)
         {
