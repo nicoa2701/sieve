@@ -15,7 +15,13 @@ CFLAGS  ?= -O3 -g -Wall -Wextra
 ARCH    ?= -march=native
 
 OPENMP  := -fopenmp
+# pthread_once garde les tables construites une seule fois ; -fopenmp l'amene
+# deja, la variante sans OpenMP en a besoin sur les libc qui le separent.
+PTHREAD := -pthread
 SINK    ?= 0
+
+# Bibliotheque de reference de `make check-crible`.
+CRIBLE_LIB ?= sieve/build/libcrible.a
 
 CC_MACROS := $(shell $(CC) $(ARCH) -dM -E - < /dev/null 2>/dev/null)
 
@@ -29,7 +35,7 @@ else
 SIMD_TIER := C portable, cible scalaire
 endif
 
-.PHONY: all clean run12 simd check sanitize force
+.PHONY: all clean run12 simd check sanitize force lib check-api check-crible
 
 all: roue12
 	@echo "Pre-crible : $(SIMD_TIER)   [$(CC) $(ARCH)]"
@@ -43,17 +49,50 @@ simd:
 	@echo "__SSE2__        : $(if $(findstring __SSE2__,$(CC_MACROS)),oui,non)"
 
 roue12: main12.o
-	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) -o $@ $^ -lm
+	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) $(PTHREAD) -o $@ $^ -lm
 
 # Temoin des drapeaux : un changement de CC, CFLAGS, ARCH, OPENMP ou SINK
 # recompile, y compris passe en ligne de commande.
-BUILD_FLAGS := $(CC) $(CFLAGS) $(ARCH) $(OPENMP) -DSINK_TAIL=$(SINK)
+BUILD_FLAGS := $(CC) $(CFLAGS) $(ARCH) $(OPENMP) $(PTHREAD) -DSINK_TAIL=$(SINK)
 
 .build-flags: force
 	@echo '$(BUILD_FLAGS)' | cmp -s - $@ || echo '$(BUILD_FLAGS)' > $@
 
-main12.o: main12.c .build-flags
-	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) -DSINK_TAIL=$(SINK) -c -o $@ $<
+main12.o: main12.c roue12.h .build-flags
+	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) $(PTHREAD) -DSINK_TAIL=$(SINK) -c -o $@ $<
+
+# La bibliotheque : le meme fichier sans la ligne de commande. Elle se lie
+# avec -fopenmp -lm et offre les fonctions de roue12.h.
+lib: libroue12.a
+
+main12-lib.o: main12.c roue12.h .build-flags
+	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) $(PTHREAD) -DSINK_TAIL=$(SINK) -DROUE12_LIB -c -o $@ $<
+
+libroue12.a: main12-lib.o
+	rm -f $@
+	ar rcs $@ $^
+
+test_api: test_api.c roue12.h libroue12.a
+	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) $(PTHREAD) -o $@ test_api.c libroue12.a -lm
+
+# L'API contre ses references independantes.
+check-api: test_api
+	./test_api
+
+# Le meme programme lie a crible : les deux bibliotheques doivent sortir les
+# memes resumes. Demande $(CRIBLE_LIB), que ce Makefile ne construit pas.
+check-crible: test_api
+	$(CC) $(CFLAGS) $(ARCH) $(PTHREAD) -o test_api-crible test_api.c $(CRIBLE_LIB) -lm
+	./test_api | grep '^D ' > .resume-roue12
+	./test_api-crible ref | grep '^D ' > .resume-crible
+	@if cmp -s .resume-roue12 .resume-crible; then \
+	    echo "roue12 et crible : `wc -l < .resume-roue12` resumes identiques"; \
+	    rm -f .resume-roue12 .resume-crible; \
+	else \
+	    diff .resume-roue12 .resume-crible; \
+	    rm -f .resume-roue12 .resume-crible; \
+	    exit 1; \
+	fi
 
 run12: roue12
 	./roue12 $(LOW) $(LIMIT) $(ARGS)
@@ -76,3 +115,4 @@ sanitize: main12.c
 
 clean:
 	rm -f roue12 main12.o roue12-asan roue12-asan-sink .build-flags
+	rm -f main12-lib.o libroue12.a test_api test_api-crible

@@ -3,6 +3,10 @@ main12.o
 roue12-asan
 roue12-asan-sink
 .build-flags
+main12-lib.o
+libroue12.a
+test_api
+test_api-crible
 *.sw[a-p]
 .*.sw[a-p]
 .vscode/

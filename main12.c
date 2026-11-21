@@ -13,6 +13,8 @@
  * 5) Tailles deduites a l'execution des caches detectes ; le segment
  *    est amorti sur les 1/p des premiers au-dela de la plaque, bande
  *    du milieu et seaux confondus.
+ * 6) Le meme fichier donne le programme et la bibliotheque : -DROUE12_LIB
+ *    retire la ligne de commande et ne laisse que l'API de roue12.h.
  */
 
 
@@ -24,17 +26,20 @@
 #include <time.h>
 #include <math.h>
 #include <unistd.h>
+#include <pthread.h>
+
+#include "roue12.h"
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-#if defined(__AVX512F__)
+#if defined(__AVX512F__) || defined(__AVX2__)
 #include <immintrin.h>
 #endif
 
 
-#define MAX_LIMIT 10000000000000000ULL
+#define MAX_LIMIT ROUE12_MAX_LIMIT
 
 #define FALLBACK_SEGMENT_KB 512
 
@@ -462,6 +467,8 @@ static int presieve_build(uint32_t pmax, double *want)
     return 0;
 }
 
+/* La bibliotheque garde ses tables jusqu'a la fin du processus. */
+#ifndef ROUE12_LIB
 static void presieve_free(void)
 {
     for (int g = 0; g < g_pre_groups; g++)
@@ -471,6 +478,7 @@ static void presieve_free(void)
     g_pre_tables = 0;
     g_pre_passes = 0;
 }
+#endif
 
 #if defined(__AVX512F__)
 #define PRESIEVE_PATH_LABEL "(intrinseques AVX-512)"
@@ -696,6 +704,13 @@ static uint8_t next210[211];
 
 static uint8_t next30[31];
 
+/* Entier porte par le bit b d'un mot de 64 bits, relatif a l'octet 0 du mot. */
+static uint8_t bit_value[64];
+
+/* Pour chaque valeur d'un octet du bitset, les residus de ses bits a 1 dans
+   l'ordre, completes par des zeros : l'extraction AVX2 les lit par huit. */
+static uint32_t byte_offsets[256][8];
+
 /*
  * Marche de la roue 210, pour les seaux. Pour p = 30k + sr et un multiple
  * m = 210q + Rj, l'octet vise vaut 210kq + 7*sr*q + k*Rj + Tj, ou Tj vaut
@@ -759,7 +774,25 @@ static void build_wheel210(void)
 
         next210[r] = (uint8_t)j;
     }
+
+    for (int b = 0; b < 64; b++)
+        bit_value[b] = (uint8_t)(30 * (b >> 3) + residues[b & 7]);
+
+    for (unsigned v = 0; v < 256; v++)
+    {
+        unsigned n = 0;
+
+        for (unsigned k = 0; k < 8; k++)
+        {
+            if (v >> k & 1u)
+                byte_offsets[v][n++] = residues[k];
+        }
+    }
 }
+
+/* Tables de roue et caches de la machine, construits une seule fois : les
+   appels de l'API peuvent arriver de plusieurs threads a la fois. */
+static void tables_init(void);
 
 
 #ifndef PREFETCH_DEFAUT
@@ -804,6 +837,10 @@ static int bucket_arena(bucket_ring_t *r)
     return 1;
 }
 
+/* Le tableau d'entrees remplit exactement le bloc : le pointeur d'un seau
+   atteint la frontiere suivante quand le bloc est plein, et vaut NULL quand
+   il n'y a pas encore de bloc — un seul test sur ses bits bas couvre les deux
+   cas, et dit quand appeler bucket_open. */
 static int bucket_open(bucket_ring_t *r, bucket_entry_t **slot)
 {
     if (!r->stock && !bucket_arena(r))
@@ -823,29 +860,6 @@ static int bucket_open(bucket_ring_t *r, bucket_entry_t **slot)
     }
 
     *slot = b->e;
-
-    return 1;
-}
-
-/* Le tableau d'entrees remplit exactement le bloc : le pointeur atteint la
-   frontiere suivante quand le bloc est plein, et vaut NULL quand il n'y a pas
-   encore de bloc — un seul test couvre les deux cas. */
-static inline int bucket_push(bucket_ring_t *r,
-                              uint64_t d,
-                              uint32_t k,
-                              uint32_t at)
-{
-    bucket_entry_t **slot = &r->cur[d];
-
-    if (((uintptr_t)*slot & (BUCKET_BLOCK_BYTES - 1)) == 0 &&
-        !bucket_open(r, slot))
-    {
-        return 0;
-    }
-
-    (*slot)->k  = k;
-    (*slot)->at = at;
-    (*slot)++;
 
     return 1;
 }
@@ -954,16 +968,15 @@ static inline int sweep_bucketed_run(uint8_t *bits,
 
                 if (skip < left)
                 {
-                    /* Reempilement fusionne dans la boucle plutot que par
-                       bucket_push. Chaque entree n'y raye qu'une fois — au
+                    /* Reempilement ecrit dans la boucle plutot que par un
+                       appel. Chaque entree n'y raye qu'une fois — au
                        dimensionnement par defaut, un premier a seau a un
                        pas plus grand que la fenetre — donc la comptabilite
                        pese autant que le marquage, et les cinq instructions
                        economisees ici comptent : le bloc passe de 17 a 12
                        instructions, -2,4 % sur le programme entier, -2,8 %
-                       sur [10^15, +10^11]. bucket_push reste la forme
-                       employee a l'activation, ou elle n'est appelee qu'une
-                       fois par premier. */
+                       sur [10^15, +10^11]. L'activation a sa propre forme,
+                       bucket_activate. */
                     bucket_entry_t **const s = cur + skip;
 
                     bucket_entry_t *e = *s;
@@ -1276,64 +1289,81 @@ done:
 }
 
 /*
- * Premiers de base jusqu'a `limit`, par le crible du programme lui-meme.
+ * La base : tous les premiers de [7, root], ranges par classe de residu mod 30
+ * puis par taille. La classe rc occupe sorted[cls[rc] .. cls[rc + 1]). C'est
+ * l'ordre dans lequel le crible les parcourt ; un plan n'y decoupe que des
+ * plages. Une fois construite elle n'est plus que lue.
+ *
+ * refs sert au cache de l'API, sous son verrou.
+ */
+typedef struct
+{
+    uint64_t  root;
+    uint32_t *sorted;
+    size_t    cls[9];
+    unsigned  refs;
+} base_t;
+
+static void base_free(base_t *b)
+{
+    if (b)
+    {
+        free(b->sorted);
+        free(b);
+    }
+}
+
+/*
+ * Construit la base jusqu'a `limit`, par le crible du programme lui-meme.
  *
  * Un octet porte 30 entiers au lieu de 2 : la fenetre active tient en L1 et
- * le balayage reutilise sweep_exact_calc, donc la roue 30 et ses masques.
- * L'extraction lit le bitset par mots de 64 bits, un ctz par premier trouve.
- * 2, 3 et 5 ne sont pas sur la roue et sont emis a part ; les amorces
- * jusqu'a racine(limit) sortent d'un crible impair trivial a cette taille.
+ * le balayage reutilise sweep_exact_calc, donc la roue 30 et ses masques. Les
+ * amorces jusqu'a racine(limit) sortent d'un crible impair trivial a cette
+ * taille.
+ *
+ * L'extraction lit le bitset par mots de 64 bits, un ctz par premier trouve,
+ * et le range aussitot dans sa classe : le rang du bit dans son octet est la
+ * classe. Un tri apres coup demandait deux passes et un % 30 par premier.
+ *
+ * Rend NULL si une allocation echoue : la fonction sert aussi a l'API, qui ne
+ * peut pas terminer le processus de son appelant.
  */
 #define BASE_SEGMENT_BYTES (32 * 1024)
 
-static uint32_t *generate_base_primes(uint64_t limit,
-                                      size_t *count)
+static base_t *base_build(uint64_t limit)
 {
-    size_t cap = 1024;
-    size_t n   = 0;
+    uint32_t *part[8] = { NULL };
+    size_t    cap[8]  = { 0 };
+    size_t    n[8]    = { 0 };
 
-    uint32_t *primes = malloc(cap * sizeof *primes);
+    uint8_t        *seed = NULL;
+    uint32_t       *sp   = NULL;
+    wheel_cursor_t *cur  = NULL;
+    uint8_t        *ok   = NULL;
+    uint8_t        *bits = NULL;
 
-    if (!primes)
-    {
-        fprintf(stderr, "allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
+    base_t *b = calloc(1, sizeof *b);
 
-    *count = 0;
+    if (!b)
+        return NULL;
 
-#define BASE_PUSH(v)                                                    \
-    do {                                                                \
-        if (n == cap)                                                   \
-        {                                                               \
-            uint32_t *grown = realloc(primes, cap * 2 * sizeof *primes);\
-                                                                        \
-            if (!grown)                                                 \
-            {                                                           \
-                fprintf(stderr, "allocation failed\n");                 \
-                free(primes);                                           \
-                exit(EXIT_FAILURE);                                     \
-            }                                                           \
-                                                                        \
-            primes = grown;                                             \
-            cap   *= 2;                                                 \
-        }                                                               \
-                                                                        \
-        primes[n++] = (uint32_t)(v);                                    \
-    } while (0)
-
-    if (limit >= 2) BASE_PUSH(2);
-    if (limit >= 3) BASE_PUSH(3);
-    if (limit >= 5) BASE_PUSH(5);
+    b->root = limit;
 
     if (limit < 7)
     {
-        *count = n;
+        b->sorted = malloc(sizeof *b->sorted);
 
-        return primes;
+        if (!b->sorted)
+        {
+            free(b);
+
+            return NULL;
+        }
+
+        return b;
     }
 
-    build_wheel210();
+    tables_init();
 
     uint64_t root = (uint64_t)sqrt((double)limit);
 
@@ -1346,14 +1376,10 @@ static uint32_t *generate_base_primes(uint64_t limit,
     /* Amorces : premiers impairs de [7, root], indice i pour 2i+1. */
     size_t sn = (size_t)(root / 2) + 1;
 
-    uint8_t *seed = malloc(sn);
+    seed = malloc(sn);
 
     if (!seed)
-    {
-        fprintf(stderr, "allocation failed\n");
-        free(primes);
-        exit(EXIT_FAILURE);
-    }
+        goto oom;
 
     memset(seed, 1, sn);
 
@@ -1378,22 +1404,13 @@ static uint32_t *generate_base_primes(uint64_t limit,
             ns++;
     }
 
-    uint32_t       *sp  = malloc((ns ? ns : 1) * sizeof *sp);
-    wheel_cursor_t *cur = malloc((ns ? ns : 1) * sizeof *cur);
-    uint8_t        *ok  = calloc(ns ? ns : 1, 1);
-    uint8_t        *bits = aligned_alloc(64, BASE_SEGMENT_BYTES + 64);
+    sp   = malloc((ns ? ns : 1) * sizeof *sp);
+    cur  = malloc((ns ? ns : 1) * sizeof *cur);
+    ok   = calloc(ns ? ns : 1, 1);
+    bits = aligned_alloc(64, BASE_SEGMENT_BYTES + 64);
 
     if (!sp || !cur || !ok || !bits)
-    {
-        fprintf(stderr, "allocation failed\n");
-        free(seed);
-        free(sp);
-        free(cur);
-        free(ok);
-        free(bits);
-        free(primes);
-        exit(EXIT_FAILURE);
-    }
+        goto oom;
 
     ns = 0;
 
@@ -1404,6 +1421,23 @@ static uint32_t *generate_base_primes(uint64_t limit,
     }
 
     free(seed);
+
+    seed = NULL;
+
+    /* Les classes se partagent les premiers a peu pres egalement ; la marge
+       d'un segment evite presque toujours d'agrandir. */
+    {
+        double est = 1.26 * (double)limit / log((double)limit) / 8.0;
+
+        for (unsigned c = 0; c < 8; c++)
+        {
+            cap[c]  = (size_t)est + BASE_SEGMENT_BYTES;
+            part[c] = malloc(cap[c] * sizeof *part[c]);
+
+            if (!part[c])
+                goto oom;
+        }
+    }
 
     const uint64_t total    = wheel_count(limit);
     const uint64_t seg_bits = (uint64_t)BASE_SEGMENT_BYTES * 8;
@@ -1446,7 +1480,29 @@ static uint32_t *generate_base_primes(uint64_t limit,
         if (first == 0)
             clear_bit(bits, 0);
 
+        /* Un segment donne au plus un premier par octet et par classe. */
+        for (unsigned c = 0; c < 8; c++)
+        {
+            if (cap[c] - n[c] < BASE_SEGMENT_BYTES)
+            {
+                size_t grown_cap = cap[c] * 2;
+
+                uint32_t *grown =
+                    realloc(part[c], grown_cap * sizeof *grown);
+
+                if (!grown)
+                    goto oom;
+
+                part[c] = grown;
+                cap[c]  = grown_cap;
+            }
+        }
+
         uint64_t words = (nbits + 63) >> 6;
+
+        /* first est multiple de 8 : le mot w commence a l'octet
+           first / 8 + 8w. */
+        const uint64_t byte0 = first >> 3;
 
         for (uint64_t w = 0; w < words; w++)
         {
@@ -1459,14 +1515,44 @@ static uint32_t *generate_base_primes(uint64_t limit,
             if (rest < 64)
                 v &= (1ULL << rest) - 1;
 
+            const uint32_t at = (uint32_t)((byte0 + 8 * w) * 30);
+
             while (v)
             {
                 int t = __builtin_ctzll(v);
 
                 v &= v - 1;
 
-                BASE_PUSH(index_to_number(first + w * 64 + (unsigned)t));
+                const unsigned c = (unsigned)t & 7;
+
+                part[c][n[c]++] = at + bit_value[t];
             }
+        }
+    }
+
+    {
+        size_t count = 0;
+
+        for (unsigned c = 0; c < 8; c++)
+        {
+            b->cls[c] = count;
+            count    += n[c];
+        }
+
+        b->cls[8] = count;
+
+        b->sorted = malloc((count ? count : 1) * sizeof *b->sorted);
+
+        if (!b->sorted)
+            goto oom;
+
+        for (unsigned c = 0; c < 8; c++)
+        {
+            memcpy(b->sorted + b->cls[c], part[c], n[c] * sizeof *part[c]);
+
+            free(part[c]);
+
+            part[c] = NULL;
         }
     }
 
@@ -1475,11 +1561,20 @@ static uint32_t *generate_base_primes(uint64_t limit,
     free(ok);
     free(bits);
 
-#undef BASE_PUSH
+    return b;
 
-    *count = n;
+oom:
+    for (unsigned c = 0; c < 8; c++)
+        free(part[c]);
 
-    return primes;
+    free(seed);
+    free(sp);
+    free(cur);
+    free(ok);
+    free(bits);
+    free(b);
+
+    return NULL;
 }
 
 
@@ -1565,6 +1660,7 @@ static void sweep_flat(uint8_t *bits,
                     const size_t *class_start,
                     const size_t *mid,
                     wheel_cursor_t *cursor,
+                    const size_t *coff,
                     uint64_t block_bytes,
                     uint64_t overshoot,
                     int64_t sink,
@@ -1572,6 +1668,10 @@ static void sweep_flat(uint8_t *bits,
 {
     const size_t o0 = toff[0], o1 = toff[1], o2 = toff[2], o3 = toff[3],
                  o4 = toff[4], o5 = toff[5], o6 = toff[6], o7 = toff[7];
+
+    /* Les curseurs sont ranges sans trou, classe apres classe. */
+    const size_t co0 = coff[0], co1 = coff[1], co2 = coff[2], co3 = coff[3],
+                 co4 = coff[4], co5 = coff[5], co6 = coff[6], co7 = coff[7];
 
         if (blocked)
         {
@@ -1594,7 +1694,7 @@ static void sweep_flat(uint8_t *bits,
                          i < mid[RC];                         \
                          i++)                                 \
                     {                                         \
-                        sweep_over(bits, &cursor[i],          \
+                        sweep_over(bits, &cursor[i - co##RC],    \
                                    turn + (i - o##RC) * TURN_SLOTS, \
                                    sorted[i], (int64_t)b1, (RC)); \
                     }
@@ -1615,7 +1715,7 @@ static void sweep_flat(uint8_t *bits,
                          i < mid[RC];                         \
                          i++)                                 \
                     {                                         \
-                        sweep_exact(bits, &cursor[i],         \
+                        sweep_exact(bits, &cursor[i - co##RC],   \
                                     turn + (i - o##RC) * TURN_SLOTS, \
                                     sorted[i], (int64_t)b1,   \
                                     (int64_t)sub, sink, (RC)); \
@@ -1643,6 +1743,7 @@ static void sweep_chunked(uint8_t *bits,
                           const size_t *mid,
                           const size_t *mid2,
                           wheel_cursor_t *cursor,
+                          const size_t *coff,
                           uint64_t block_bytes,
                           uint64_t chunk_bytes,
                           uint64_t overshoot,
@@ -1652,6 +1753,10 @@ static void sweep_chunked(uint8_t *bits,
 {
     const size_t o0 = toff[0], o1 = toff[1], o2 = toff[2], o3 = toff[3],
                  o4 = toff[4], o5 = toff[5], o6 = toff[6], o7 = toff[7];
+
+    /* Les curseurs sont ranges sans trou, classe apres classe. */
+    const size_t co0 = coff[0], co1 = coff[1], co2 = coff[2], co3 = coff[3],
+                 co4 = coff[4], co5 = coff[5], co6 = coff[6], co7 = coff[7];
 
     uint64_t chunk = chunk_bytes;
 
@@ -1690,7 +1795,7 @@ static void sweep_chunked(uint8_t *bits,
                              i < mid[RC];                     \
                              i++)                             \
                         {                                     \
-                            sweep_over(bits, &cursor[i],      \
+                            sweep_over(bits, &cursor[i - co##RC], \
                                        turn + (i - o##RC) * TURN_SLOTS, \
                                        sorted[i], (int64_t)b1, (RC)); \
                         }
@@ -1711,7 +1816,7 @@ static void sweep_chunked(uint8_t *bits,
                              i < mid[RC];                     \
                              i++)                             \
                         {                                     \
-                            sweep_exact(bits, &cursor[i],     \
+                            sweep_exact(bits, &cursor[i - co##RC], \
                                         turn + (i - o##RC) * TURN_SLOTS,\
                                         sorted[i], (int64_t)b1, \
                                         (int64_t)sub, sink, (RC)); \
@@ -1737,7 +1842,7 @@ static void sweep_chunked(uint8_t *bits,
 #define SWEEP_CHUNK(RC)                                       \
                     for (size_t i = mid[RC]; i < mid2[RC]; i++) \
                     {                                         \
-                        sweep_over(bits, &cursor[i],          \
+                        sweep_over(bits, &cursor[i - co##RC],    \
                                    turn + (i - o##RC) * TURN_SLOTS, \
                                    sorted[i], (int64_t)c1, (RC)); \
                     }
@@ -1756,7 +1861,7 @@ static void sweep_chunked(uint8_t *bits,
 #define SWEEP_CHUNK(RC)                                       \
                     for (size_t i = mid[RC]; i < mid2[RC]; i++) \
                     {                                         \
-                        sweep_exact(bits, &cursor[i],         \
+                        sweep_exact(bits, &cursor[i - co##RC],   \
                                     turn + (i - o##RC) * TURN_SLOTS, \
                                     sorted[i], (int64_t)c1,   \
                                     (int64_t)sub, sink, (RC)); \
@@ -1786,6 +1891,7 @@ static void sweep_slabbed(uint8_t *bits,
                           const size_t *mid2,
                           const size_t *mid3,
                           wheel_cursor_t *cursor,
+                          const size_t *coff,
                           uint64_t block_bytes,
                           uint64_t chunk_bytes,
                           uint64_t slab_bytes,
@@ -1797,6 +1903,10 @@ static void sweep_slabbed(uint8_t *bits,
 {
     const size_t o0 = toff[0], o1 = toff[1], o2 = toff[2], o3 = toff[3],
                  o4 = toff[4], o5 = toff[5], o6 = toff[6], o7 = toff[7];
+
+    /* Les curseurs sont ranges sans trou, classe apres classe. */
+    const size_t co0 = coff[0], co1 = coff[1], co2 = coff[2], co3 = coff[3],
+                 co4 = coff[4], co5 = coff[5], co6 = coff[6], co7 = coff[7];
 
     for (uint64_t s0 = 0; s0 < segment_bytes; s0 += slab_bytes)
     {
@@ -1846,7 +1956,7 @@ static void sweep_slabbed(uint8_t *bits,
                              i < mid[RC];                     \
                              i++)                             \
                         {                                     \
-                            sweep_over(bits, &cursor[i],      \
+                            sweep_over(bits, &cursor[i - co##RC], \
                                        turn + (i - o##RC) * TURN_SLOTS, \
                                        sorted[i], (int64_t)b1, (RC)); \
                         }
@@ -1867,7 +1977,7 @@ static void sweep_slabbed(uint8_t *bits,
                              i < mid[RC];                     \
                              i++)                             \
                         {                                     \
-                            sweep_exact(bits, &cursor[i],     \
+                            sweep_exact(bits, &cursor[i - co##RC], \
                                         turn + (i - o##RC) * TURN_SLOTS,\
                                         sorted[i], (int64_t)b1, \
                                         (int64_t)sub, sink, (RC)); \
@@ -1893,7 +2003,7 @@ static void sweep_slabbed(uint8_t *bits,
 #define SWEEP_CHUNK(RC)                                       \
                     for (size_t i = mid[RC]; i < mid2[RC]; i++) \
                     {                                         \
-                        sweep_over(bits, &cursor[i],          \
+                        sweep_over(bits, &cursor[i - co##RC],    \
                                    turn + (i - o##RC) * TURN_SLOTS, \
                                    sorted[i], (int64_t)c1, (RC)); \
                     }
@@ -1912,7 +2022,7 @@ static void sweep_slabbed(uint8_t *bits,
 #define SWEEP_CHUNK(RC)                                       \
                     for (size_t i = mid[RC]; i < mid2[RC]; i++) \
                     {                                         \
-                        sweep_exact(bits, &cursor[i],         \
+                        sweep_exact(bits, &cursor[i - co##RC],   \
                                     turn + (i - o##RC) * TURN_SLOTS, \
                                     sorted[i], (int64_t)c1,   \
                                     (int64_t)sub, sink, (RC)); \
@@ -1939,7 +2049,7 @@ static void sweep_slabbed(uint8_t *bits,
 #define SWEEP_SLAB(RC)                                        \
                 for (size_t i = mid2[RC]; i < mid3[RC]; i++)  \
                 {                                             \
-                    sweep_over(bits, &cursor[i],              \
+                    sweep_over(bits, &cursor[i - co##RC],        \
                                turn + (i - o##RC) * TURN_SLOTS, \
                                sorted[i], (int64_t)s1, (RC)); \
                 }
@@ -1958,7 +2068,7 @@ static void sweep_slabbed(uint8_t *bits,
 #define SWEEP_SLAB(RC)                                        \
                 for (size_t i = mid2[RC]; i < mid3[RC]; i++)  \
                 {                                             \
-                    sweep_exact(bits, &cursor[i],             \
+                    sweep_exact(bits, &cursor[i - co##RC],       \
                                 turn + (i - o##RC) * TURN_SLOTS, \
                                 sorted[i], (int64_t)s1,       \
                                 (int64_t)sub, sink, (RC));    \
@@ -1974,6 +2084,110 @@ static void sweep_slabbed(uint8_t *bits,
             }
         }
     }
+}
+
+static size_t upper_bound_u32(const uint32_t *a, size_t lo, size_t hi,
+                              uint64_t v);
+
+static uint64_t isqrt_u64(uint64_t n);
+
+/*
+ * Les premiers a seau de la classe rc, sorted[from .. to), entrent dans les
+ * seaux des leur activation, positionnes sur la roue 210 : chacun est range
+ * dans la fenetre de son premier multiple >= low et >= p * p, s'il tombe dans
+ * le chunk. Rend 0 si un bloc de seau ne peut pas etre alloue.
+ */
+__attribute__((noinline))
+static int bucket_activate(const uint32_t *sorted,
+                           size_t from,
+                           size_t to,
+                           unsigned rc,
+                           uint64_t low,
+                           uint64_t first_byte,
+                           bucket_ring_t *ring,
+                           uint64_t gw0,
+                           uint64_t chunk_windows)
+{
+    bucket_entry_t **const cur = ring->cur;
+
+    const unsigned shift = ring->shift;
+    const uint32_t wheel = rc * 48;
+
+    /* Fenetres du chunk encore devant : au-dela, le premier n'y marque pas. */
+    const uint64_t room = chunk_windows > gw0 ? chunk_windows - gw0 : 0;
+
+    /*
+     * Un seau perdu pour les entrees hors chunk, qui n'avance jamais. Son
+     * adresse ne doit pas tomber sur une frontiere de bloc, que le test de
+     * bloc plein prendrait pour un seau a ouvrir.
+     */
+    bucket_entry_t lost[3];
+
+    bucket_entry_t *lost_top =
+        ((uintptr_t)&lost[1] & (BUCKET_BLOCK_BYTES - 1)) ? &lost[1]
+                                                         : &lost[2];
+
+    for (size_t a = from; a < to; a++)
+    {
+        const uint32_t p = sorted[a];
+
+        /* Une division entiere par premier. La meme en flottant, par paquets
+           vectorises, a ete mesuree plus lente : 28,5 ms contre 24,2. */
+        uint64_t m = (low + p - 1) / p;
+
+        if (m < p)
+            m = p;
+
+        uint64_t q = m / 210;
+        unsigned j = next210[m % 210];
+
+        if (j == 48)
+        {
+            q++;
+            j = 0;
+        }
+
+        m = 210 * q + residues210[j];
+
+        /* p * m >= low, donc x >= 0. */
+        const uint64_t x    = (uint64_t)p * m / 30 - first_byte;
+        const uint64_t skip = x >> shift;
+
+        /*
+         * Aucun branchement ne depend de `in`. Pres de 10^16 un chunk
+         * etroit ne garde que 41 % des premiers a seau, et le test
+         * bascule une fois sur trois : mal predit, il coutait plus que
+         * tout le calcul qui precede — 34,7 ms contre 15,3 pour 5,5
+         * millions de premiers. L'entree est donc toujours ecrite, dans
+         * son seau ou dans le seau perdu, et seul le pointeur du seau
+         * avance ou non.
+         */
+        const uintptr_t in   = skip < room;
+        const uintptr_t mask = (uintptr_t)0 - in;
+
+        bucket_entry_t **const slot = (bucket_entry_t **)
+            ((((uintptr_t)cur + (uintptr_t)(skip & mask) * sizeof *cur)
+              & mask)
+             | ((uintptr_t)&lost_top & ~mask));
+
+        bucket_entry_t *e = *slot;
+
+        if (__builtin_expect(
+                ((uintptr_t)e & (BUCKET_BLOCK_BYTES - 1)) == 0, 0))
+        {
+            if (!bucket_open(ring, slot))
+                return 0;
+
+            e = *slot;
+        }
+
+        e->k  = p / 30;
+        e->at = (uint32_t)((x - (skip << shift)) << 9) | (wheel + j);
+
+        *slot = e + in;
+    }
+
+    return 1;
 }
 
 /*
@@ -1995,8 +2209,10 @@ sieve_segment(uint8_t *bits,
               const size_t *class_mid2,
               const size_t *class_mid3,
               const size_t *class_mid4,
+              const size_t *class_stop,
               size_t *active,
               wheel_cursor_t *cursor,
+              const size_t *coff,
               uint64_t block_bytes,
               uint64_t chunk_bytes,
               uint64_t slab_bytes,
@@ -2015,10 +2231,13 @@ sieve_segment(uint8_t *bits,
     for (unsigned rc = 0; rc < 8; rc++)
         was[rc] = active[rc];
 
+    /* p * p <= high equivaut a p <= racine(high). */
+    const uint64_t root_high = isqrt_u64(high);
+
     for (unsigned rc = 0; rc < 8; rc++)
     {
         size_t a   = active[rc];
-        size_t end = class_start[rc + 1];
+        size_t end = class_stop[rc];
 
         {
             size_t stop = end < class_mid4[rc] ? end : class_mid4[rc];
@@ -2030,21 +2249,17 @@ sieve_segment(uint8_t *bits,
                 if ((uint64_t)p * p > high)
                     goto fini;
 
-                activate_prime(p, segment_first_index, low, &cursor[a]);
+                activate_prime(p, segment_first_index, low,
+                               &cursor[a - coff[rc]]);
 
                 a++;
             }
         }
 
-        while (a < end)
-        {
-            uint32_t p = sorted[a];
-
-            if ((uint64_t)p * p > high)
-                break;
-
-            a++;
-        }
+        /* Les premiers a seau actifs : ceux dont le carre atteint le
+           segment. Une dichotomie, la ou un parcours relisait toute la
+           classe. */
+        a = upper_bound_u32(sorted, a, end, root_high);
 
     fini:;
 
@@ -2057,44 +2272,12 @@ sieve_segment(uint8_t *bits,
         {
             size_t from = was[rc] > class_mid4[rc] ? was[rc] : class_mid4[rc];
 
-            /* Les premiers au-dela de class_mid4 entrent dans les seaux des
-               leur activation, positionnes sur la roue 210. */
-            for (size_t a = from; a < active[rc]; a++)
+            if (from < active[rc] &&
+                !bucket_activate(sorted, from, active[rc], rc, low,
+                                 segment_first_index >> 3, ring, gw0,
+                                 chunk_windows))
             {
-                uint32_t p = sorted[a];
-
-                uint64_t m = (low + p - 1) / p;
-
-                if (m < p)
-                    m = p;
-
-                uint64_t q = m / 210;
-                unsigned j = next210[m % 210];
-
-                if (j == 48)
-                {
-                    q++;
-                    j = 0;
-                }
-
-                m = 210 * q + residues210[j];
-
-                int64_t x = (int64_t)((uint64_t)p * m / 30)
-                          - (int64_t)(segment_first_index >> 3);
-
-                if (x < 0)
-                    continue;
-
-                uint64_t skip = (uint64_t)x >> ring->shift;
-
-                if (gw0 + skip < chunk_windows &&
-                    !bucket_push(ring, skip, p / 30,
-                                 (uint32_t)(((uint64_t)x -
-                                             (skip << ring->shift)) << 9)
-                                 | (uint32_t)(rc * 48 + j)))
-                {
-                    *bucket_failed = 1;
-                }
+                *bucket_failed = 1;
             }
         }
     }
@@ -2143,18 +2326,19 @@ sieve_segment(uint8_t *bits,
     if (slabbed && slab_bytes)
     {
         sweep_slabbed(bits, segment_bytes, sorted, turn, toff, class_start, mid,
-                      mid2, mid3, cursor, block_bytes, chunk_bytes, slab_bytes,
+                      mid2, mid3, cursor, coff, block_bytes, chunk_bytes,
+                      slab_bytes,
                       overshoot, overshoot2, overshoot3, sink, blocked);
     }
     else if (!chunked)
     {
         sweep_flat(bits, segment_bytes, sorted, turn, toff, class_start, mid,
-                   cursor, block_bytes, overshoot, sink, blocked);
+                   cursor, coff, block_bytes, overshoot, sink, blocked);
     }
     else
     {
         sweep_chunked(bits, segment_bytes, sorted, turn, toff, class_start, mid,
-                      mid2, cursor, block_bytes, chunk_bytes, overshoot,
+                      mid2, cursor, coff, block_bytes, chunk_bytes, overshoot,
                       overshoot2, sink, blocked);
     }
 
@@ -2168,7 +2352,7 @@ sieve_segment(uint8_t *bits,
     for (size_t i = (slabbed && slab_bytes ? mid3[RC] : mid2[RC]);\
          i < mid4[RC]; i++)                                   \
     {                                                         \
-        sweep_exact_calc(bits, &cursor[i],                    \
+        sweep_exact_calc(bits, &cursor[i - coff[RC]],         \
                          sorted[i], (int64_t)segment_bytes,   \
                          (int64_t)segment_bytes, sink, (RC)); \
     }
@@ -2342,16 +2526,63 @@ static unsigned cache_sharers(int want_level)
     return 1;
 }
 
-static uint64_t default_block_bytes(int threads)
+/*
+ * Ce que la machine dit de ses caches, releve une fois : sysconf et sysfs
+ * coutent des ouvertures de fichiers, et l'API dimensionne un crible a chaque
+ * appel. Une valeur inconnue reste a 0.
+ */
+typedef struct
+{
+    long     l1d;
+    long     l2;
+    long     cpus;
+    unsigned share1;
+    unsigned share2;
+    uint64_t l2_kb;
+    uint64_t l3_kb;
+} machine_t;
+
+static machine_t g_machine;
+
+static void machine_detect(void)
 {
 #ifdef _SC_LEVEL1_DCACHE_SIZE
-    long l1 = sysconf(_SC_LEVEL1_DCACHE_SIZE);
+    g_machine.l1d = sysconf(_SC_LEVEL1_DCACHE_SIZE);
+#endif
+#ifdef _SC_LEVEL2_CACHE_SIZE
+    g_machine.l2 = sysconf(_SC_LEVEL2_CACHE_SIZE);
+#endif
+    g_machine.cpus = sysconf(_SC_NPROCESSORS_ONLN);
+
+    g_machine.share1 = cache_sharers(1);
+    g_machine.share2 = cache_sharers(2);
+
+    g_machine.l2_kb = detect_cache_kb(2);
+    g_machine.l3_kb = detect_cache_kb(3);
+}
+
+static pthread_once_t g_tables_once = PTHREAD_ONCE_INIT;
+
+static void tables_build(void)
+{
+    build_wheel210();
+    machine_detect();
+}
+
+static void tables_init(void)
+{
+    pthread_once(&g_tables_once, tables_build);
+}
+
+static uint64_t default_block_bytes(int threads)
+{
+    long l1 = g_machine.l1d;
 
     if (l1 > 0)
     {
-        long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+        long cpus = g_machine.cpus;
 
-        unsigned share = cache_sharers(1);
+        unsigned share = g_machine.share1;
 
         unsigned cores =
             (cpus > 0 && (unsigned long)cpus >= share)
@@ -2379,9 +2610,6 @@ static uint64_t default_block_bytes(int threads)
 
         return b;
     }
-#else
-    (void)threads;
-#endif
 
     return 0;
 }
@@ -2415,14 +2643,13 @@ static int default_thread_count(int max_threads,
 
 static uint64_t default_chunk_bytes(int threads)
 {
-#ifdef _SC_LEVEL2_CACHE_SIZE
-    long l2 = sysconf(_SC_LEVEL2_CACHE_SIZE);
+    long l2 = g_machine.l2;
 
     if (l2 > 0)
     {
-        long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+        long cpus = g_machine.cpus;
 
-        unsigned share = cache_sharers(2);
+        unsigned share = g_machine.share2;
 
         unsigned cores =
             (cpus > 0 && (unsigned long)cpus >= share)
@@ -2444,23 +2671,19 @@ static uint64_t default_chunk_bytes(int threads)
 
         return b;
     }
-#else
-    (void)threads;
-#endif
 
     return 0;
 }
 
 static uint64_t default_slab_bytes(int threads)
 {
-#ifdef _SC_LEVEL2_CACHE_SIZE
-    long l2 = sysconf(_SC_LEVEL2_CACHE_SIZE);
+    long l2 = g_machine.l2;
 
     if (l2 > 0)
     {
-        long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+        long cpus = g_machine.cpus;
 
-        unsigned share = cache_sharers(2);
+        unsigned share = g_machine.share2;
 
         unsigned cores =
             (cpus > 0 && (unsigned long)cpus >= share)
@@ -2482,35 +2705,116 @@ static uint64_t default_slab_bytes(int threads)
 
         return b;
     }
-#else
-    (void)threads;
-#endif
 
     return 0;
 }
 
-/*
- * Taille de segment telle qu'un premier de [lo, hi) fasse en moyenne
- * SEGMENT_MARKS_PER_ENTRY marques par segment : il y fait 8s / p marques pour
- * une seule entree de curseur.
- */
-static uint64_t amortized_segment_bytes(const uint32_t *primes,
-                                        size_t lo,
-                                        size_t hi)
+/* Premier index de [lo, hi) dont la valeur depasse v, dans un tableau
+   croissant. */
+static size_t upper_bound_u32(const uint32_t *a,
+                              size_t lo,
+                              size_t hi,
+                              uint64_t v)
 {
-    if (hi <= lo)
-        return 0;
+    while (lo < hi)
+    {
+        size_t m = lo + (hi - lo) / 2;
 
+        if (a[m] <= v)
+            lo = m + 1;
+        else
+            hi = m;
+    }
+
+    return lo;
+}
+
+/*
+ * Les premiers de crible d'un plan sont huit plages croissantes de la base,
+ * une par classe : [lo[rc], hi[rc]). Leur rang se compte de 1, du plus petit
+ * au plus grand, toutes classes confondues.
+ *
+ * Nombre de premiers <= v.
+ */
+static uint64_t ranks_le(const uint32_t *sorted,
+                         const size_t *lo,
+                         const size_t *hi,
+                         uint64_t v)
+{
+    uint64_t n = 0;
+
+    for (unsigned rc = 0; rc < 8; rc++)
+        n += upper_bound_u32(sorted, lo[rc], hi[rc], v) - lo[rc];
+
+    return n;
+}
+
+/* Le premier de rang donne, entre 1 et le nombre de premiers. */
+static uint32_t rank_value(const uint32_t *sorted,
+                           const size_t *lo,
+                           const size_t *hi,
+                           uint64_t rank)
+{
+    uint64_t a = 0;
+    uint64_t b = UINT32_MAX;
+
+    while (a < b)
+    {
+        uint64_t m = a + (b - a) / 2;
+
+        if (ranks_le(sorted, lo, hi, m) >= rank)
+            b = m;
+        else
+            a = m + 1;
+    }
+
+    return (uint32_t)a;
+}
+
+/*
+ * Taille de segment telle qu'un premier de la bande du milieu — ceux qui
+ * depassent p_low — fasse en moyenne SEGMENT_MARKS_PER_ENTRY marques par
+ * segment : il y fait 8s / p marques pour une seule entree de curseur.
+ *
+ * La somme des 1/p se prend par paquets de 16 premiers d'une meme classe,
+ * chacun compte pour ses deux premiers du milieu. 1/p varie de moins de 1 %
+ * dans un paquet et l'erreur est du second ordre, sous 10^-6 ; huit divisions
+ * sur seize en moins, sur une somme qui en demandait une par premier a chaque
+ * crible.
+ */
+#define AMORT_PACK 16
+
+static uint64_t amortized_segment_bytes(const uint32_t *sorted,
+                                        const size_t *lo,
+                                        const size_t *hi,
+                                        uint64_t p_low)
+{
     double inv = 0.0;
 
-    for (size_t i = lo; i < hi; i++)
-        inv += 1.0 / (double)primes[i];
+    uint64_t count = 0;
 
-    if (!(inv > 0.0))
+    for (unsigned rc = 0; rc < 8; rc++)
+    {
+        size_t i   = upper_bound_u32(sorted, lo[rc], hi[rc], p_low);
+        size_t end = hi[rc];
+
+        count += end - i;
+
+        for (; i + AMORT_PACK <= end; i += AMORT_PACK)
+        {
+            inv += (AMORT_PACK / 2.0) / (double)sorted[i + AMORT_PACK / 2 - 1]
+                 + (AMORT_PACK / 2.0) / (double)sorted[i + AMORT_PACK / 2];
+        }
+
+        for (; i < end; i++)
+            inv += 1.0 / (double)sorted[i];
+    }
+
+    if (!count || !(inv > 0.0))
         return 0;
 
     double s =
-        (double)(hi - lo) * SEGMENT_MARKS_PER_ENTRY / (8.0 * inv);
+        (double)count * SEGMENT_MARKS_PER_ENTRY / (8.0 * inv);
 
     if (!(s > 0.0))
         return 0;
@@ -2518,6 +2822,1616 @@ static uint64_t amortized_segment_bytes(const uint32_t *primes,
     return (uint64_t)s;
 }
 
+static uint64_t isqrt_u64(uint64_t n)
+{
+    uint64_t root = (uint64_t)sqrt((double)n);
+
+    while ((root + 1) <= n / (root + 1))
+        root++;
+
+    while (root && root > n / root)
+        root--;
+
+    return root;
+}
+
+/*
+ * Reglages d'etalonnage, ceux que la ligne de commande peut imposer. Tout a
+ * zero, hors presieve_max et slab_mult, donne le dimensionnement automatique.
+ */
+typedef struct
+{
+    uint64_t segment_kb;
+
+    /* Plancher du segment automatique, ignore si segment_kb est impose. */
+    uint64_t segment_min_kb;
+
+    uint64_t chunk_override;
+
+    uint32_t presieve_max;
+
+    uint64_t block_kb;
+    int      block_set;
+    uint64_t block_max;
+
+    uint64_t chunk_kb;
+    int      chunk_set;
+
+    uint64_t slab_kb;
+    int      slab_set;
+    uint64_t slab_mult;
+
+    uint64_t bucket_kb;
+    int      bucket_set;
+    uint64_t bucket_mult;
+} tuning_t;
+
+/*
+ * Le plan d'un crible de [low_limit, limit] : dans la base, la plage de
+ * chaque classe et son decoupage en etages, les tailles retenues, le
+ * decoupage en chunks. Construit une fois, puis lu seulement — les threads se
+ * le partagent. La base ne lui appartient pas.
+ */
+typedef struct
+{
+    uint64_t low_limit;
+    uint64_t limit;
+
+    int threads;
+
+    /* base->sorted, et dans chaque classe la plage du plan : les premiers
+       de ]presieve_max, racine(limit)]. Les index sont ceux de la base. */
+    const uint32_t *sorted;
+
+    size_t class_start[8];
+    size_t class_mid[8];
+    size_t class_mid2[8];
+    size_t class_mid3[8];
+    size_t class_mid4[8];
+    size_t class_stop[8];
+    size_t toff[8];
+
+    /* Les curseurs ne servent qu'aux premiers hors seaux, et sont ranges
+       sans trou : celui du premier d'index i de la classe rc est en
+       i - coff[rc]. Les index de la base, eux, ont un trou entre deux
+       classes des que la base depasse la racine du plan. */
+    size_t coff[8];
+    size_t cursor_count;
+
+    uint32_t *turn;
+
+    uint64_t    segment_kb;
+    uint64_t    segment_bytes;
+    uint64_t    segment_bits;
+    const char *segment_origin;
+
+    uint64_t block_bytes;
+    uint64_t chunk_bytes;
+    uint64_t slab_bytes;
+    uint64_t bucket_bytes;
+
+    /* Premiers de chaque etage a balayage par blocs. */
+    uint64_t n_block;
+    uint64_t n_chunk;
+    uint64_t n_slab;
+
+    uint32_t p_block;
+    uint32_t p_chunk;
+    uint32_t p_slab;
+    uint32_t p_bucket;
+
+    uint64_t overshoot;
+    uint64_t overshoot2;
+    uint64_t overshoot3;
+
+    unsigned bucket_shift;
+    uint64_t bucket_primes;
+    uint64_t ring_slots;
+
+    /* Premiers absents du bitset : 2, 3, 5 et ceux du pre-crible. */
+    uint64_t small_total;
+
+    uint64_t total_candidates;
+    uint64_t sieve_first;
+    uint64_t skip_bits;
+
+    uint64_t chunk_segments;
+    uint64_t chunk_count;
+    uint64_t chunk_candidates;
+} plan_t;
+
+static void plan_free(plan_t *pl)
+{
+    free(pl->turn);
+
+    pl->turn = NULL;
+}
+
+/*
+ * Dimensionne le crible de [low_limit, limit] sur une base qui couvre au
+ * moins racine(limit). Le pre-crible doit deja etre construit pour
+ * tu->presieve_max.
+ *
+ * threads est le nombre de threads qui cribleront, il regle le decoupage en
+ * chunks ; sizing_threads est le nombre de cribles qui tournent en meme temps
+ * sur la machine, il regle le partage des caches. La ligne de commande passe
+ * deux fois la meme valeur ; l'API, quand elle crible sur le thread de son
+ * appelant, passe 1 et le nombre de threads de l'application.
+ *
+ * Rien ici ne parcourt les premiers un a un : les bandes se trouvent par
+ * dichotomie dans chaque classe, pour qu'un plan sur une base deja construite
+ * ne coute presque rien.
+ *
+ * Rend 0 si une allocation echoue.
+ */
+static int plan_build(plan_t *pl,
+                      const base_t *base,
+                      uint64_t low_limit,
+                      uint64_t limit,
+                      const tuning_t *tu,
+                      int threads,
+                      int sizing_threads)
+{
+    memset(pl, 0, sizeof *pl);
+
+    tables_init();
+
+    const uint32_t presieve_max = tu->presieve_max;
+
+    uint64_t segment_kb = tu->segment_kb;
+
+    const char *segment_origin = "-s";
+
+    uint64_t segment_bytes = 0;
+    uint64_t segment_bits  = 0;
+
+    const uint64_t root = isqrt_u64(limit);
+
+    const uint32_t *const sorted = base->sorted;
+
+    /* La plage de chaque classe : au-dela du pre-crible, jusqu'a la racine. */
+    size_t class_start[8];
+    size_t class_stop[8];
+
+    for (unsigned rc = 0; rc < 8; rc++)
+    {
+        class_start[rc] = upper_bound_u32(sorted, base->cls[rc],
+                                          base->cls[rc + 1], presieve_max);
+        class_stop[rc]  = upper_bound_u32(sorted, class_start[rc],
+                                          base->cls[rc + 1], root);
+    }
+
+#define RANKS_LE(v)   ranks_le(sorted, class_start, class_stop, (v))
+#define RANK_VALUE(r) rank_value(sorted, class_start, class_stop, (r))
+
+    /* Nombre de premiers de crible. e_block <= e_chunk <= e_slab sont les
+       rangs ou finissent les trois premiers etages. */
+    const uint64_t sorted_count = RANKS_LE(UINT32_MAX);
+
+    uint64_t block_bytes =
+        tu->block_set ? tu->block_kb * 1024ULL
+                      : default_block_bytes(sizing_threads);
+
+    uint64_t e_block = 0;
+
+    if (block_bytes)
+    {
+        if (tu->block_max)
+        {
+            e_block = tu->block_max;
+
+            if (e_block > sorted_count)
+                e_block = sorted_count;
+        }
+        else
+        {
+            e_block = RANKS_LE(block_bytes / BLOCK_MIN_TURNS);
+        }
+
+        if (e_block == 0)
+            block_bytes = 0;
+    }
+
+    uint64_t chunk_bytes =
+        tu->chunk_set ? tu->chunk_kb * 1024ULL
+                      : default_chunk_bytes(sizing_threads);
+
+    uint64_t e_chunk = e_block;
+
+    if (chunk_bytes <= block_bytes)
+        chunk_bytes = 0;
+
+    if (chunk_bytes)
+    {
+        uint64_t e = RANKS_LE(chunk_bytes);
+
+        if (e > e_chunk)
+            e_chunk = e;
+
+        if (e_chunk <= e_block)
+            chunk_bytes = 0;
+    }
+
+    uint32_t p_chunk = chunk_bytes ? RANK_VALUE(e_chunk) : 0;
+
+    /* Marge d'un tour complet, celle qu'exige sweep_over. */
+    uint64_t overshoot2 =
+        chunk_bytes ? (uint64_t)p_chunk * 29 / 30 + 1 : 0;
+
+    uint64_t slab_bytes =
+        tu->slab_set ? tu->slab_kb * 1024ULL
+                     : default_slab_bytes(sizing_threads);
+
+    uint64_t e_slab = e_chunk;
+
+    if (!chunk_bytes || slab_bytes <= chunk_bytes)
+        slab_bytes = 0;
+
+    if (slab_bytes)
+    {
+        uint64_t e = RANKS_LE(slab_bytes * tu->slab_mult);
+
+        if (e > e_slab)
+            e_slab = e;
+
+        if (e_slab <= e_chunk)
+            slab_bytes = 0;
+    }
+
+    /*
+       La plaque peut couvrir jusqu'a sqrt(N) : la bande directe est alors
+       vide, mais la plaque reste utile. L'eteindre renvoyait ses premiers
+       sur le segment entier, deux fois la part de L2 du thread : +1,5 % a
+       10^11 (707 ms contre 691 pour ddd_multi4 a plaque conservee, le
+       2026-09-07). Le segment se dimensionne alors sur le L2, plus bas.
+    */
+
+    uint32_t p_slab = slab_bytes ? RANK_VALUE(e_slab) : 0;
+
+    uint64_t overshoot3 =
+        slab_bytes ? (uint64_t)p_slab * 29 / 30 + 1 : 0;
+
+    if (segment_kb == 0)
+    {
+        /* La bande du milieu : tout ce qui suit les trois premiers etages. */
+        uint64_t s =
+            amortized_segment_bytes(sorted, class_start, class_stop,
+                                    e_slab ? RANK_VALUE(e_slab) : 0);
+
+        if (s)
+        {
+            segment_origin = "amorti auto";
+        }
+        else
+        {
+            uint64_t l2_kb = g_machine.l2_kb;
+
+            if (l2_kb >= MIN_SEGMENT_KB &&
+                l2_kb <= MAX_SEGMENT_KB)
+            {
+                if (slab_bytes)
+                {
+                    /* la plaque vaut la part de L2 du thread : le
+                       segment en porte autant que de threads partageant
+                       ce L2, deux sur le 9700X, comme ddd_multi4 */
+                    s = l2_kb * 1024ULL;
+                    segment_origin = "L2, chemin direct vide (plaque)";
+                }
+                else
+                {
+                    s = l2_kb * 1024ULL / 2;
+                    segment_origin = "L2/2, chemin direct vide";
+                }
+            }
+            else
+            {
+                s = FALLBACK_SEGMENT_KB * 1024ULL;
+                segment_origin = "defaut, chemin direct vide";
+            }
+        }
+
+        {
+            uint64_t l3_kb = g_machine.l3_kb;
+
+            if (l3_kb && sizing_threads > 0)
+            {
+                uint64_t share = slab_bytes ? 1ULL : 2ULL;
+
+                uint64_t cap =
+                    l3_kb * 1024ULL / share / (uint64_t)sizing_threads;
+
+                if (cap < MIN_SEGMENT_KB * 1024ULL)
+                    cap = MIN_SEGMENT_KB * 1024ULL;
+
+                if (s > cap)
+                {
+                    s = cap;
+
+                    segment_origin =
+                        slab_bytes ? "plafond L3 par thread (plaque)"
+                                   : "plafond L3/2 par thread";
+                }
+            }
+        }
+
+        if (block_bytes)
+        {
+            uint64_t k =
+                (s + block_bytes / 2) / block_bytes;
+
+            if (k == 0)
+                k = 1;
+
+            s = k * block_bytes;
+        }
+
+        segment_kb = s / 1024;
+
+        if (segment_kb < tu->segment_min_kb)
+            segment_kb = tu->segment_min_kb;
+
+        if (segment_kb < MIN_SEGMENT_KB)
+            segment_kb = MIN_SEGMENT_KB;
+
+        if (segment_kb > MAX_SEGMENT_KB)
+            segment_kb = MAX_SEGMENT_KB;
+    }
+
+    segment_bytes = segment_kb * 1024ULL;
+    segment_bits  = segment_bytes * 8ULL;
+
+    if (block_bytes > segment_bytes)
+    {
+        block_bytes = segment_bytes;
+
+        if (!tu->block_max)
+            e_block = RANKS_LE(block_bytes / BLOCK_MIN_TURNS);
+
+        if (e_block == 0)
+            block_bytes = 0;
+    }
+
+    /* La fenetre de seau par defaut suit la tranche telle que les caches la
+       donnent, avant que le segment ne la borne ci-dessous. */
+    const uint64_t bucket_default = chunk_bytes ? chunk_bytes : slab_bytes;
+
+    /*
+     * Un etage ne balaie pas plus large que le segment, et sa bande suit sa
+     * fenetre. Un premier dont le tour depasse la fenetre y serait parcouru
+     * a chaque passage pour moins d'un tour de marques : c'est le travail de
+     * la bande directe et des seaux. Mesure a [10^12, +1,6e7] en segments de
+     * 32 Kio, la plaque gardait 38 229 premiers de tour jusqu'a 640 Kio et le
+     * criblage coutait 7,5 ms ; sans elle, 5,0 ms.
+     *
+     * Ne mord qu'avec un segment plus petit que la plaque : un -s explicite,
+     * ou un L3 etroit par thread.
+     */
+    if (chunk_bytes > segment_bytes)
+    {
+        chunk_bytes = segment_bytes;
+        e_chunk     = e_block;
+
+        if (chunk_bytes > block_bytes)
+        {
+            uint64_t e = RANKS_LE(chunk_bytes);
+
+            if (e > e_chunk)
+                e_chunk = e;
+        }
+
+        if (e_chunk <= e_block)
+            chunk_bytes = 0;
+
+        p_chunk = chunk_bytes ? RANK_VALUE(e_chunk) : 0;
+
+        overshoot2 =
+            chunk_bytes ? (uint64_t)p_chunk * 29 / 30 + 1 : 0;
+    }
+
+    if (slab_bytes > segment_bytes)
+    {
+        slab_bytes = segment_bytes;
+        e_slab     = e_chunk;
+
+        if (chunk_bytes && slab_bytes > chunk_bytes)
+        {
+            uint64_t e = RANKS_LE(slab_bytes * tu->slab_mult);
+
+            if (e > e_slab)
+                e_slab = e;
+        }
+
+        if (e_slab <= e_chunk)
+            slab_bytes = 0;
+
+        p_slab = slab_bytes ? RANK_VALUE(e_slab) : 0;
+
+        overshoot3 =
+            slab_bytes ? (uint64_t)p_slab * 29 / 30 + 1 : 0;
+    }
+
+    uint32_t p_block =
+        block_bytes ? RANK_VALUE(e_block) : 0;
+
+    uint64_t overshoot =
+        block_bytes
+            ? (uint64_t)p_block * 29 / 30 + 1
+            : 0;
+
+    /* Dans chaque classe, la fin de chaque etage. Un etage eteint a un seuil
+       nul et ne prend rien. */
+    size_t class_mid[8];
+    size_t class_mid2[8];
+    size_t class_mid3[8];
+
+    for (unsigned rc = 0; rc < 8; rc++)
+    {
+        class_mid[rc] =
+            upper_bound_u32(sorted, class_start[rc], class_stop[rc], p_block);
+
+        class_mid2[rc] =
+            upper_bound_u32(sorted, class_mid[rc], class_stop[rc], p_chunk);
+
+        class_mid3[rc] =
+            upper_bound_u32(sorted, class_mid2[rc], class_stop[rc], p_slab);
+    }
+
+    uint64_t bucket_bytes = tu->bucket_set ? tu->bucket_kb * 1024
+                          : bucket_default;
+
+    if (bucket_bytes > segment_bytes)
+        bucket_bytes = segment_bytes;
+
+    if (bucket_bytes > BUCKET_WINDOW_MAX_BYTES)
+        bucket_bytes = BUCKET_WINDOW_MAX_BYTES;
+
+    if (bucket_bytes)
+    {
+        uint64_t pow2 = 1;
+
+        while (pow2 * 2 <= bucket_bytes)
+            pow2 *= 2;
+
+        bucket_bytes = pow2;
+
+        while (bucket_bytes && segment_bytes % bucket_bytes)
+            bucket_bytes >>= 1;
+    }
+
+    unsigned bucket_shift = 0;
+
+    for (uint64_t v = bucket_bytes; v > 1; v >>= 1)
+        bucket_shift++;
+
+    if (!sorted_count)
+        bucket_bytes = 0;
+
+    int wheel210 = (presieve_max >= 7 && g_pre_passes);
+
+    if (!wheel210)
+        bucket_bytes = 0;
+
+    uint64_t p_bucket_want =
+        tu->bucket_mult ? bucket_bytes * tu->bucket_mult
+                        : segment_bytes * 5 / 2;
+
+    uint32_t p_bucket =
+        bucket_bytes && p_bucket_want < UINT32_MAX
+            ? (uint32_t)p_bucket_want
+            : 0;
+
+    size_t class_mid4[8];
+
+    uint64_t bucket_primes = 0;
+
+    size_t coff[8];
+
+    size_t cursor_count = 0;
+
+    for (unsigned rc = 0; rc < 8; rc++)
+    {
+        class_mid4[rc] =
+            p_bucket ? upper_bound_u32(sorted, class_mid3[rc],
+                                       class_stop[rc], p_bucket)
+                     : class_stop[rc];
+
+        bucket_primes += class_stop[rc] - class_mid4[rc];
+
+        coff[rc]      = class_start[rc] - cursor_count;
+        cursor_count += class_mid4[rc] - class_start[rc];
+    }
+
+    size_t tbase[8];
+
+    size_t turn_count = 0;
+
+    for (unsigned rc = 0; rc < 8; rc++)
+    {
+        tbase[rc]   = turn_count;
+        turn_count += class_mid3[rc] - class_start[rc];
+    }
+
+    size_t toff[8];
+
+    for (unsigned rc = 0; rc < 8; rc++)
+        toff[rc] = class_start[rc] - tbase[rc];
+
+    uint32_t *turn =
+        malloc((turn_count ? turn_count : 1)
+               * TURN_SLOTS * sizeof *turn);
+
+    if (!turn)
+        return 0;
+
+    for (unsigned rc = 0; rc < 8; rc++)
+    {
+        build_turn_offsets(sorted + class_start[rc],
+                           class_mid3[rc] - class_start[rc],
+                           turn + tbase[rc] * TURN_SLOTS);
+    }
+
+    uint64_t small_total = 0;
+
+    if (2 >= low_limit && 2 <= limit) small_total++;
+    if (3 >= low_limit && 3 <= limit) small_total++;
+    if (5 >= low_limit && 5 <= limit) small_total++;
+
+    for (int i = 0; i < g_pre_count; i++)
+    {
+        if (g_pre_primes[i] >= low_limit &&
+            g_pre_primes[i] <= limit)
+        {
+            small_total++;
+        }
+    }
+
+    uint64_t total_candidates =
+        wheel_count(limit);
+
+    uint64_t first_candidate =
+        low_limit > 1 ? wheel_count(low_limit - 1) : 0;
+
+    /* Le crible demarre sur une frontiere d'octet ; les bits candidats situes
+       sous low_limit sont effaces apres coup. */
+    uint64_t sieve_first = first_candidate & ~(uint64_t)7;
+
+    uint64_t skip_bits = first_candidate - sieve_first;
+
+    uint64_t work_candidates = total_candidates - sieve_first;
+
+    uint64_t total_segments =
+        (work_candidates + segment_bits - 1) / segment_bits;
+
+    uint64_t chunk_segments;
+
+    if (tu->chunk_override)
+    {
+        /* Plafonne a la plage entiere : au-dela, chunk_segments *
+           segment_bits deborde et chunk_candidates retombe sous la
+           taille reelle, ne criblant qu'une partie du domaine. */
+        chunk_segments =
+            tu->chunk_override < total_segments ? tu->chunk_override
+                                                : total_segments;
+
+        if (chunk_segments == 0)
+            chunk_segments = 1;
+    }
+    else
+    {
+        uint64_t target =
+            (uint64_t)threads * CHUNKS_PER_THREAD;
+
+        chunk_segments = (total_segments + target - 1) / target;
+
+        if (chunk_segments == 0)
+            chunk_segments = 1;
+
+        /* Sans premier a seau il n'y a rien a reposer : le decoupage ne
+           bouge pas. La contrainte ne mord donc que sur les intervalles
+           etroits a borne haute, ou la repose domine le criblage. */
+        if (bucket_primes)
+        {
+            uint64_t need =
+                (bucket_primes * BUCKET_AMORT + segment_bits - 1)
+                / segment_bits;
+
+            uint64_t floor_target =
+                (uint64_t)threads * MIN_CHUNKS_PER_THREAD;
+
+            uint64_t cap =
+                (total_segments + floor_target - 1) / floor_target;
+
+            if (cap == 0)
+                cap = 1;
+
+            if (need > cap)
+                need = cap;
+
+            if (need > chunk_segments)
+                chunk_segments = need;
+        }
+    }
+
+    uint64_t chunk_count =
+        (total_segments + chunk_segments - 1) / chunk_segments;
+
+    uint64_t chunk_candidates = chunk_segments * segment_bits;
+
+    uint64_t ring_slots = 1;
+
+    if (bucket_bytes)
+    {
+        /* L'anneau est indexe depuis le debut du segment, sa fente 0, et
+           doit couvrir deux portees. Le saut d'un premier entre deux marques
+           d'abord : l'ecart maximal des residus de la roue 210 vaut 10, soit
+           p / 3 octets, que 2p majore largement. L'activation ensuite, qui
+           pose la premiere marque en p * p, donc n'importe ou dans le
+           segment. */
+        uint64_t need =
+            (segment_bytes + 2 * (uint64_t)RANK_VALUE(sorted_count))
+            / bucket_bytes + 4;
+
+        uint64_t cap_windows =
+            (chunk_candidates / 8 + bucket_bytes - 1) / bucket_bytes + 2;
+
+        if (need > cap_windows)
+            need = cap_windows;
+
+        while (ring_slots < need)
+            ring_slots <<= 1;
+    }
+
+#undef RANKS_LE
+#undef RANK_VALUE
+
+    pl->low_limit = low_limit;
+    pl->limit     = limit;
+    pl->threads   = threads;
+
+    pl->sorted = sorted;
+
+    memcpy(pl->class_start, class_start, sizeof class_start);
+    memcpy(pl->class_mid,   class_mid,   sizeof class_mid);
+    memcpy(pl->class_mid2,  class_mid2,  sizeof class_mid2);
+    memcpy(pl->class_mid3,  class_mid3,  sizeof class_mid3);
+    memcpy(pl->class_mid4,  class_mid4,  sizeof class_mid4);
+    memcpy(pl->class_stop,  class_stop,  sizeof class_stop);
+    memcpy(pl->toff,        toff,        sizeof toff);
+
+    memcpy(pl->coff, coff, sizeof coff);
+
+    pl->cursor_count = cursor_count;
+
+    pl->turn = turn;
+
+    pl->segment_kb     = segment_kb;
+    pl->segment_bytes  = segment_bytes;
+    pl->segment_bits   = segment_bits;
+    pl->segment_origin = segment_origin;
+
+    pl->block_bytes  = block_bytes;
+    pl->chunk_bytes  = chunk_bytes;
+    pl->slab_bytes   = slab_bytes;
+    pl->bucket_bytes = bucket_bytes;
+
+    pl->n_block = e_block;
+    pl->n_chunk = e_chunk - e_block;
+    pl->n_slab  = e_slab - e_chunk;
+
+    pl->p_block  = p_block;
+    pl->p_chunk  = p_chunk;
+    pl->p_slab   = p_slab;
+    pl->p_bucket = p_bucket;
+
+
+    pl->overshoot  = overshoot;
+    pl->overshoot2 = overshoot2;
+    pl->overshoot3 = overshoot3;
+
+    pl->bucket_shift  = bucket_shift;
+    pl->bucket_primes = bucket_primes;
+    pl->ring_slots    = ring_slots;
+
+    pl->small_total = small_total;
+
+    pl->total_candidates = total_candidates;
+    pl->sieve_first      = sieve_first;
+    pl->skip_bits        = skip_bits;
+
+    pl->chunk_segments   = chunk_segments;
+    pl->chunk_count      = chunk_count;
+    pl->chunk_candidates = chunk_candidates;
+
+    return 1;
+}
+
+/* Ce qu'un thread possede en propre : son bitset, ses curseurs, ses seaux. */
+typedef struct
+{
+    uint8_t        *bits;
+    wheel_cursor_t *cursor;
+    bucket_ring_t   ring;
+} worker_t;
+
+static int worker_init(const plan_t *pl, worker_t *w)
+{
+    w->bits =
+        aligned_alloc(64, pl->segment_bytes + 64);
+
+    w->cursor =
+        malloc((pl->cursor_count ? pl->cursor_count : 1) * sizeof *w->cursor);
+
+    memset(&w->ring, 0, sizeof w->ring);
+
+    w->ring.slots = pl->ring_slots;
+    w->ring.win   = pl->bucket_bytes;
+    w->ring.shift = pl->bucket_shift;
+
+    /* Deux residus consecutifs de la roue 210 sont distants d'au moins
+       2 : le pas d'un premier a seau vaut au moins 2 * (p / 30) octets. */
+    w->ring.one   = 2 * (uint64_t)(pl->p_bucket / 30) >= pl->bucket_bytes;
+
+    if (pl->bucket_bytes)
+        w->ring.cur = calloc((size_t)pl->ring_slots, sizeof *w->ring.cur);
+
+    return w->bits && w->cursor && (!pl->bucket_bytes || w->ring.cur);
+}
+
+static void worker_free(worker_t *w)
+{
+    free(w->bits);
+    free(w->cursor);
+    bucket_ring_free(&w->ring);
+
+    w->bits   = NULL;
+    w->cursor = NULL;
+}
+
+/*
+ * Ce qu'on fait d'un segment crible. bits porte nbits candidats a partir de
+ * l'index first, toujours multiple de 8 ; les bits sous low_limit sont deja
+ * effaces, ceux au-dela de nbits sont indetermines. Rend 0 pour arreter.
+ */
+typedef int (*segment_fn)(void *ctx,
+                          const uint8_t *bits,
+                          uint64_t first,
+                          uint64_t nbits);
+
+/*
+ * Crible le chunk c, segment par segment. Un chunk peut demarrer n'importe
+ * ou : il reactive ses curseurs et repose ses seaux. Rend 0 si visit a
+ * demande l'arret.
+ */
+static int chunk_run(const plan_t *pl,
+                     worker_t *w,
+                     uint64_t c,
+                     segment_fn visit,
+                     void *ctx,
+                     int *bucket_failed)
+{
+    const uint64_t segment_bits = pl->segment_bits;
+    const uint64_t bucket_bytes = pl->bucket_bytes;
+
+    uint8_t *const bits = w->bits;
+
+    bucket_ring_t *const ring = w->ring.cur ? &w->ring : NULL;
+
+    uint64_t chunk_first =
+        pl->sieve_first + c * pl->chunk_candidates;
+
+    uint64_t chunk_end =
+        chunk_first + pl->chunk_candidates;
+
+    if (chunk_end > pl->total_candidates)
+        chunk_end = pl->total_candidates;
+
+    size_t active[8];
+
+    for (unsigned rc = 0; rc < 8; rc++)
+        active[rc] = pl->class_start[rc];
+
+    uint64_t chunk_windows = 0;
+
+    if (ring)
+    {
+        for (uint64_t i = 0; i < pl->ring_slots; i++)
+        {
+            bucket_entry_t *p = ring->cur[i];
+
+            ring->cur[i] = NULL;
+
+            for (bucket_block_t *b = p ? BUCKET_BLOCK_OF(p) : NULL;
+                 b; )
+            {
+                bucket_block_t *prev = b->next;
+
+                b->next     = ring->stock;
+                ring->stock = b;
+                b = prev;
+            }
+        }
+
+        chunk_windows =
+            ((chunk_end - chunk_first + 7) / 8 + bucket_bytes - 1)
+            / bucket_bytes;
+    }
+
+    uint64_t segment_first = chunk_first;
+
+    while (segment_first < chunk_end)
+    {
+        uint64_t segment_last =
+            segment_first + segment_bits - 1;
+
+        if (segment_last >= chunk_end)
+            segment_last = chunk_end - 1;
+
+        uint64_t low =
+            index_to_number(segment_first);
+
+        uint64_t high =
+            index_to_number(segment_last);
+
+        if (high > pl->limit)
+            high = pl->limit;
+
+        uint64_t actual_bits =
+            segment_last - segment_first + 1;
+
+        uint64_t actual_bytes =
+            (actual_bits + 7) >> 3;
+
+        if (g_pre_passes)
+        {
+            presieve_fill(bits,
+                          actual_bytes,
+                          segment_first >> 3);
+        }
+        else
+        {
+            memset(bits, 0xFF, actual_bytes);
+        }
+
+        sieve_segment(
+            bits,
+            segment_first,
+            actual_bytes,
+            low,
+            high,
+            pl->sorted,
+            pl->turn,
+            pl->toff,
+            pl->class_start,
+            pl->class_mid,
+            pl->class_mid2,
+            pl->class_mid3,
+            pl->class_mid4,
+            pl->class_stop,
+            active,
+            w->cursor,
+            pl->coff,
+            pl->block_bytes,
+            pl->chunk_bytes,
+            pl->slab_bytes,
+            pl->overshoot,
+            pl->overshoot2,
+            pl->overshoot3,
+            ring,
+            ((segment_first - chunk_first) / 8) / (bucket_bytes ?
+                                                   bucket_bytes : 1),
+            chunk_windows,
+            bucket_failed
+        );
+
+        if (segment_first == pl->sieve_first)
+        {
+            for (uint64_t b = 0; b < pl->skip_bits; b++)
+                clear_bit(bits, b);
+        }
+
+        if (segment_first == 0)
+        {
+            clear_bit(bits, 0);
+        }
+
+        if (!visit(ctx, bits, segment_first, actual_bits))
+            return 0;
+
+        segment_first = segment_last + 1;
+    }
+
+    return 1;
+}
+
+static int visit_count(void *ctx,
+                       const uint8_t *bits,
+                       uint64_t first,
+                       uint64_t nbits)
+{
+    (void)first;
+
+    *(uint64_t *)ctx += count_set_bits(bits, nbits);
+
+    return 1;
+}
+
+/*
+ * Compte les bits restes a 1 sur tout le plan, les chunks distribues entre
+ * pl->threads threads. Rend 0 si une allocation echoue.
+ */
+static int engine_count(const plan_t *pl, uint64_t *out)
+{
+    int alloc_failed = 0;
+
+    uint64_t found = 0;
+
+#ifdef _OPENMP
+#   pragma omp parallel num_threads(pl->threads) reduction(+:found)
+#endif
+    {
+        worker_t w;
+
+        uint64_t mine = 0;
+
+        int bucket_failed = 0;
+
+        if (!worker_init(pl, &w))
+        {
+#ifdef _OPENMP
+#           pragma omp atomic write
+#endif
+            alloc_failed = 1;
+        }
+
+#ifdef _OPENMP
+#       pragma omp for schedule(dynamic, 1)
+#endif
+        for (int64_t c = 0; c < (int64_t)pl->chunk_count; c++)
+        {
+            int stop;
+
+#ifdef _OPENMP
+#           pragma omp atomic read
+#endif
+            stop = alloc_failed;
+
+            if (stop)
+                continue;
+
+            chunk_run(pl, &w, (uint64_t)c, visit_count, &mine,
+                      &bucket_failed);
+
+            if (bucket_failed)
+            {
+#ifdef _OPENMP
+#               pragma omp atomic write
+#endif
+                alloc_failed = 1;
+            }
+        }
+
+        found += mine;
+
+        worker_free(&w);
+    }
+
+    *out = found;
+
+    return !alloc_failed;
+}
+
+/*
+ * Parcourt le plan dans l'ordre, sur le thread appelant, et remet chaque
+ * segment a visit. Rend 0 si une allocation echoue ; un arret demande par
+ * visit n'est pas un echec.
+ */
+static int engine_walk(const plan_t *pl, segment_fn visit, void *ctx)
+{
+    worker_t w;
+
+    int bucket_failed = 0;
+
+    int ok = worker_init(pl, &w);
+
+    for (uint64_t c = 0; ok && c < pl->chunk_count; c++)
+    {
+        int more = chunk_run(pl, &w, c, visit, ctx, &bucket_failed);
+
+        if (bucket_failed)
+            ok = 0;
+
+        if (!more)
+            break;
+    }
+
+    worker_free(&w);
+
+    return ok;
+}
+
+
+/*
+ * L'API de roue12.h. Le pre-crible y est toujours celui par defaut, construit
+ * au premier appel et garde jusqu'a la fin du processus.
+ */
+static const tuning_t tuning_default =
+{
+    .presieve_max = PRESIEVE_DEFAULT_MAX,
+    .slab_mult    = 1,
+};
+
+static unsigned g_api_threads;
+
+/*
+ * Le cache de l'API : une base, la plus large demandee jusqu'ici, que tous
+ * les appels et tous les threads se partagent. Un programme qui crible par
+ * morceaux refaisait la meme base a chaque appel ; pres de 10^16 c'etait un
+ * quart du temps de crible_count_points.
+ *
+ * Deux verrous. g_base_mu garde le pointeur et les comptes de reference, le
+ * temps de quelques instructions. g_build_mu met les constructions en file :
+ * un appel que la base courante sert deja n'attend pas celle qu'un autre
+ * agrandit.
+ *
+ * La base grandit par bonds de moitie, pour qu'une suite de morceaux a bornes
+ * croissantes ne la refasse pas a chaque pas ; elle ne depasse pas
+ * racine(10^16), soit 5,76 millions de premiers et 23 Mo. Elle n'est jamais
+ * rendue : le cache garde sa reference jusqu'a la fin du processus.
+ */
+#define BASE_ROOT_MAX 100000000ULL
+#define BASE_ROOT_MIN 65536ULL
+
+static pthread_mutex_t g_base_mu  = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_build_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static base_t *g_base;
+
+/* La base courante si elle couvre root, une reference de plus. */
+static base_t *base_try(uint64_t root)
+{
+    base_t *b = NULL;
+
+    pthread_mutex_lock(&g_base_mu);
+
+    if (g_base && g_base->root >= root)
+    {
+        b = g_base;
+        b->refs++;
+    }
+
+    pthread_mutex_unlock(&g_base_mu);
+
+    return b;
+}
+
+static void base_release(const base_t *held)
+{
+    base_t *b = (base_t *)held;
+
+    pthread_mutex_lock(&g_base_mu);
+
+    int dead = (--b->refs == 0);
+
+    pthread_mutex_unlock(&g_base_mu);
+
+    if (dead)
+        base_free(b);
+}
+
+/* Une base qui couvre root, a rendre par base_release. NULL si une
+   allocation echoue. */
+static const base_t *base_acquire(uint64_t root)
+{
+    base_t *b = base_try(root);
+
+    if (b)
+        return b;
+
+    pthread_mutex_lock(&g_build_mu);
+
+    /* Un autre thread a pu la construire pendant l'attente. */
+    b = base_try(root);
+
+    if (!b)
+    {
+        uint64_t want = root + root / 2;
+
+        if (want < BASE_ROOT_MIN)
+            want = BASE_ROOT_MIN;
+
+        if (want > BASE_ROOT_MAX)
+            want = BASE_ROOT_MAX;
+
+        if (want < root)
+            want = root;
+
+        b = base_build(want);
+
+        /* Faute de memoire pour la marge, la base au plus juste. */
+        if (!b && want > root)
+            b = base_build(root);
+
+        if (b)
+        {
+            /* Une reference pour le cache, une pour l'appelant. */
+            b->refs = 2;
+
+            pthread_mutex_lock(&g_base_mu);
+
+            base_t *old = g_base;
+
+            g_base = b;
+
+            int dead = (old && --old->refs == 0);
+
+            pthread_mutex_unlock(&g_base_mu);
+
+            if (dead)
+                base_free(old);
+        }
+    }
+
+    pthread_mutex_unlock(&g_build_mu);
+
+    return b;
+}
+
+static pthread_once_t g_api_once = PTHREAD_ONCE_INIT;
+
+static int g_api_ready;
+
+static void api_build(void)
+{
+    double want = 0.0;
+
+    tables_init();
+
+    g_api_ready = (presieve_build(PRESIEVE_DEFAULT_MAX, &want) == 0);
+}
+
+static int api_init(void)
+{
+    pthread_once(&g_api_once, api_build);
+
+    return g_api_ready;
+}
+
+void crible_set_threads(unsigned n)
+{
+    g_api_threads = n;
+}
+
+unsigned crible_get_threads(void)
+{
+    tables_init();
+
+    unsigned cpus = g_machine.cpus > 0 ? (unsigned)g_machine.cpus : 1u;
+
+    return (g_api_threads == 0 || g_api_threads > cpus) ? cpus
+                                                        : g_api_threads;
+}
+
+crible_status crible_count_primes(uint64_t start,
+                                  uint64_t stop,
+                                  uint64_t *result)
+{
+    *result = 0;
+
+    if (start > stop)
+        return CRIBLE_OK;
+
+    if (stop > MAX_LIMIT)
+        return CRIBLE_EUNSUPPORTED;
+
+    if (!api_init())
+        return CRIBLE_ENOMEM;
+
+    int threads = 1;
+
+#ifdef _OPENMP
+    threads = default_thread_count((int)crible_get_threads(),
+                                   stop - start + 1,
+                                   isqrt_u64(stop));
+#endif
+
+    const base_t *base = base_acquire(isqrt_u64(stop));
+
+    if (!base)
+        return CRIBLE_ENOMEM;
+
+    plan_t pl;
+
+    if (!plan_build(&pl, base, start, stop, &tuning_default, threads,
+                    threads))
+    {
+        base_release(base);
+
+        return CRIBLE_ENOMEM;
+    }
+
+    uint64_t found = 0;
+
+    int ok = engine_count(&pl, &found);
+
+    if (ok)
+        *result = pl.small_total + found;
+
+    plan_free(&pl);
+    base_release(base);
+
+    return ok ? CRIBLE_OK : CRIBLE_ENOMEM;
+}
+
+/* Premiers absents du bitset — 2, 3, 5 et ceux du pre-crible — dans
+   [lo, hi]. out recoit ceux trouves s'il n'est pas NULL. */
+#define SMALL_PRIMES_MAX \
+    (3 + sizeof g_pre_primes / sizeof g_pre_primes[0])
+
+static size_t small_primes_in(uint64_t lo, uint64_t hi, uint64_t *out)
+{
+    size_t n = 0;
+
+    for (uint64_t p = 2; p <= 5; p++)
+    {
+        if (p != 4 && p >= lo && p <= hi)
+        {
+            if (out)
+                out[n] = p;
+
+            n++;
+        }
+    }
+
+    for (int i = 0; i < g_pre_count; i++)
+    {
+        uint64_t p = g_pre_primes[i];
+
+        if (p >= lo && p <= hi)
+        {
+            if (out)
+                out[n] = p;
+
+            n++;
+        }
+    }
+
+    return n;
+}
+
+/* Bits a 1 de la plage [a, b) du bitset. */
+static uint64_t count_bits_range(const uint8_t *bits,
+                                 uint64_t a,
+                                 uint64_t b)
+{
+    if (a >= b)
+        return 0;
+
+    const uint64_t wa = a >> 6;
+    const uint64_t wb = (b - 1) >> 6;
+
+    const uint64_t head = ~0ULL << (a & 63);
+    const uint64_t tail = ~0ULL >> (63 - ((b - 1) & 63));
+
+    uint64_t w;
+
+    memcpy(&w, bits + 8 * wa, sizeof w);
+
+    if (wa == wb)
+        return (uint64_t)__builtin_popcountll(w & head & tail);
+
+    uint64_t count = (uint64_t)__builtin_popcountll(w & head);
+
+    for (uint64_t k = wa + 1; k < wb; k++)
+    {
+        memcpy(&w, bits + 8 * k, sizeof w);
+
+        count += (uint64_t)__builtin_popcountll(w);
+    }
+
+    memcpy(&w, bits + 8 * wb, sizeof w);
+
+    return count + (uint64_t)__builtin_popcountll(w & tail);
+}
+
+typedef struct
+{
+    const uint64_t *points;
+    uint64_t       *counts;
+    size_t          n;
+    size_t          i;
+    uint64_t        run;
+} points_ctx_t;
+
+/*
+ * run porte les premiers du bitset deja passes. Un point se regle dans le
+ * segment qui contient son dernier candidat : wheel_count(point) est l'index
+ * juste apres lui.
+ */
+static int visit_points(void *vctx,
+                        const uint8_t *bits,
+                        uint64_t first,
+                        uint64_t nbits)
+{
+    points_ctx_t *c = vctx;
+
+    uint64_t pos = 0;
+
+    while (c->i < c->n)
+    {
+        uint64_t idx = wheel_count(c->points[c->i]);
+
+        if (idx > first + nbits)
+            break;
+
+        uint64_t rel = idx > first ? idx - first : 0;
+
+        if (rel > pos)
+        {
+            c->run += count_bits_range(bits, pos, rel);
+            pos = rel;
+        }
+
+        c->counts[c->i++] += c->run;
+    }
+
+    c->run += count_bits_range(bits, pos, nbits);
+
+    return c->i < c->n;
+}
+
+crible_status crible_count_points(uint64_t start,
+                                  const uint64_t *points,
+                                  size_t n,
+                                  uint64_t *counts)
+{
+    if (!n)
+        return CRIBLE_OK;
+
+    uint64_t stop = points[n - 1];
+
+    if (stop > MAX_LIMIT)
+        return CRIBLE_EUNSUPPORTED;
+
+    if (!api_init())
+        return CRIBLE_ENOMEM;
+
+    for (size_t i = 0; i < n; i++)
+        counts[i] = small_primes_in(start, points[i], NULL);
+
+    if (stop < start)
+        return CRIBLE_OK;
+
+    /* Un seul chunk : rien ne se vole sur un thread, et chaque chunk de plus
+       reactiverait tous les premiers. */
+    tuning_t tu = tuning_default;
+
+    tu.chunk_override = UINT64_MAX;
+
+    const base_t *base = base_acquire(isqrt_u64(stop));
+
+    if (!base)
+        return CRIBLE_ENOMEM;
+
+    plan_t pl;
+
+    if (!plan_build(&pl, base, start, stop, &tu, 1,
+                    (int)crible_get_threads()))
+    {
+        base_release(base);
+
+        return CRIBLE_ENOMEM;
+    }
+
+    points_ctx_t c = { points, counts, n, 0, 0 };
+
+    int ok = engine_walk(&pl, visit_points, &c);
+
+    /* Les points que le crible n'a pas atteints : l'intervalle ne porte
+       aucun candidat. */
+    for (; c.i < n; c.i++)
+        counts[c.i] += c.run;
+
+    plan_free(&pl);
+    base_release(base);
+
+    return ok ? CRIBLE_OK : CRIBLE_ENOMEM;
+}
+
+/* Octets de bitset par lot, et son plus grand contenu : 8 premiers par octet. */
+#define FOREACH_BATCH_BYTES 4096
+#define FOREACH_BATCH_MAX   (FOREACH_BATCH_BYTES * 8)
+
+/* L'extraction AVX2 ecrit jusqu'a 8 cases au-dela de son resultat. */
+#define FOREACH_OFF_SLACK 8
+
+typedef struct
+{
+    crible_batch_cb cb;
+    void           *ctx;
+    uint64_t       *buf;
+    uint32_t       *off;
+} foreach_ctx_t;
+
+#if defined(__AVX2__)
+/*
+ * Les premiers d'un mot, en decalages 32 bits depuis l'octet 0 du lot. Chaque
+ * octet ecrit ses huit cases d'un coup, lues dans byte_offsets, a la place que
+ * donne le popcount des octets qui le precedent : aucun branchement ne depend
+ * des donnees, et l'octet suivant recouvre les cases en trop du precedent.
+ * Une boucle a un ctz par premier coutait le double sur la meme fenetre.
+ */
+static inline size_t
+extract_word_avx2(uint32_t *o, uint64_t w, uint32_t rel)
+{
+    const __m256i base = _mm256_set1_epi32((int)rel);
+
+    for (int k = 0; k < 8; k++)
+    {
+        const unsigned v = (unsigned)(w >> (8 * k)) & 0xFFu;
+
+        const size_t at =
+            k ? (size_t)__builtin_popcountll(w & ((1ULL << (8 * k)) - 1))
+              : 0;
+
+        __m256i t =
+            _mm256_loadu_si256((const __m256i *)(const void *)byte_offsets[v]);
+
+        t = _mm256_add_epi32(t,
+                             _mm256_add_epi32(base,
+                                              _mm256_set1_epi32(30 * k)));
+
+        _mm256_storeu_si256((__m256i *)(void *)(o + at), t);
+    }
+
+    return (size_t)__builtin_popcountll(w);
+}
+#endif
+
+static int visit_foreach(void *vctx,
+                         const uint8_t *bits,
+                         uint64_t first,
+                         uint64_t nbits)
+{
+    foreach_ctx_t *c = vctx;
+
+    const uint64_t words = (nbits + 63) >> 6;
+    const uint64_t step  = FOREACH_BATCH_BYTES / 8;
+
+    /* first est multiple de 8 : le mot w commence a l'octet first / 8 + 8w. */
+    const uint64_t byte0 = first >> 3;
+
+    for (uint64_t w0 = 0; w0 < words; w0 += step)
+    {
+        const uint64_t w1 = w0 + step < words ? w0 + step : words;
+
+        size_t n = 0;
+
+#if defined(__AVX2__)
+        for (uint64_t w = w0; w < w1; w++)
+        {
+            uint64_t v;
+
+            memcpy(&v, bits + 8 * w, sizeof v);
+
+            uint64_t rest = nbits - w * 64;
+
+            if (rest < 64)
+                v &= (1ULL << rest) - 1;
+
+            n += extract_word_avx2(c->off + n, v,
+                                   (uint32_t)(240 * (w - w0)));
+        }
+
+        {
+            const uint64_t low = (byte0 + 8 * w0) * 30;
+
+            for (size_t k = 0; k < n; k++)
+                c->buf[k] = low + c->off[k];
+        }
+#else
+        for (uint64_t w = w0; w < w1; w++)
+        {
+            uint64_t v;
+
+            memcpy(&v, bits + 8 * w, sizeof v);
+
+            uint64_t rest = nbits - w * 64;
+
+            if (rest < 64)
+                v &= (1ULL << rest) - 1;
+
+            const uint64_t low = (byte0 + 8 * w) * 30;
+
+            while (v)
+            {
+                int t = __builtin_ctzll(v);
+
+                v &= v - 1;
+
+                c->buf[n++] = low + bit_value[t];
+            }
+        }
+#endif
+
+        if (n && !c->cb(c->buf, n, c->ctx))
+            return 0;
+    }
+
+    return 1;
+}
+
+crible_status crible_foreach_seg(uint64_t start,
+                                 uint64_t stop,
+                                 unsigned k,
+                                 uint32_t segment_bytes,
+                                 crible_batch_cb cb,
+                                 void *ctx)
+{
+    if (start > stop || k < 1 || k > 6)
+        return CRIBLE_OK;
+
+    if (k != 1 || stop > MAX_LIMIT)
+        return CRIBLE_EUNSUPPORTED;
+
+    if (!api_init())
+        return CRIBLE_ENOMEM;
+
+    {
+        uint64_t small[SMALL_PRIMES_MAX];
+
+        size_t ns = small_primes_in(start, stop, small);
+
+        if (ns && !cb(small, ns, ctx))
+            return CRIBLE_OK;
+    }
+
+    tuning_t tu = tuning_default;
+
+    tu.chunk_override = UINT64_MAX;
+
+    /* segment_bytes n'est qu'un plancher. crible en fait la taille exacte,
+       et compte passe 32 Kio pour l'empecher de lancer des threads et garder
+       de petits lots : roue12 tient les deux quel que soit le segment, et
+       32 Kio lui coutent le double du segment qu'il choisit lui-meme. */
+    tu.segment_min_kb = ((uint64_t)segment_bytes + 1023) / 1024;
+
+    const base_t *base = base_acquire(isqrt_u64(stop));
+
+    if (!base)
+        return CRIBLE_ENOMEM;
+
+    plan_t pl;
+
+    if (!plan_build(&pl, base, start, stop, &tu, 1,
+                    (int)crible_get_threads()))
+    {
+        base_release(base);
+
+        return CRIBLE_ENOMEM;
+    }
+
+    foreach_ctx_t c = { cb, ctx, NULL, NULL };
+
+    /* Un seul bloc : les valeurs du lot, puis ses decalages 32 bits. */
+    c.buf = malloc((size_t)FOREACH_BATCH_MAX * sizeof *c.buf
+                   + ((size_t)FOREACH_BATCH_MAX + FOREACH_OFF_SLACK)
+                     * sizeof *c.off);
+
+    if (c.buf)
+        c.off = (uint32_t *)(void *)(c.buf + FOREACH_BATCH_MAX);
+
+    int ok = c.buf && engine_walk(&pl, visit_foreach, &c);
+
+    free(c.buf);
+
+    plan_free(&pl);
+    base_release(base);
+
+    return ok ? CRIBLE_OK : CRIBLE_ENOMEM;
+}
+
+
+#ifndef ROUE12_LIB
 
 static double elapsed_seconds(struct timespec *a,
                               struct timespec *b)
@@ -3083,11 +4997,27 @@ int main(int argc, char **argv)
         limit = low_limit + dist;
     }
 
-#ifdef _OPENMP
-    if (want_threads > 0)
-        omp_set_num_threads((int)want_threads);
+    tuning_t tu =
+    {
+        .segment_kb     = segment_kb,
+        .chunk_override = chunk_override,
+        .presieve_max   = presieve_max,
+        .block_kb       = block_kb,
+        .block_set      = block_set,
+        .block_max      = block_max,
+        .chunk_kb       = chunk_kb,
+        .chunk_set      = chunk_set,
+        .slab_kb        = slab_kb,
+        .slab_set       = slab_set,
+        .slab_mult      = slab_mult,
+        .bucket_kb      = bucket_kb,
+        .bucket_set     = bucket_set,
+        .bucket_mult    = bucket_mult,
+    };
 
-    int threads = omp_get_max_threads();
+#ifdef _OPENMP
+    int threads =
+        want_threads > 0 ? (int)want_threads : omp_get_max_threads();
 #else
     (void)want_threads;
 
@@ -3101,21 +5031,6 @@ int main(int argc, char **argv)
 
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    const char *segment_origin = "-s";
-
-
-    uint64_t segment_bytes = 0;
-    uint64_t segment_bits  = 0;
-
-    uint64_t root =
-        (uint64_t)sqrt((double)limit);
-
-    while ((root + 1) <= limit / (root + 1))
-        root++;
-
-    while (root && root > limit / root)
-        root--;
-
 #ifdef _OPENMP
     /* Le plafond ne vaut que pour le choix automatique : un -t explicite est
        honore tel quel, comme une taille de segment explicite. */
@@ -3124,23 +5039,15 @@ int main(int argc, char **argv)
         int useful =
             default_thread_count(max_threads,
                                  limit - low_limit + 1,
-                                 root);
+                                 isqrt_u64(limit));
 
         if (useful < threads)
         {
-            omp_set_num_threads(useful);
-
             threads        = useful;
             threads_capped = 1;
         }
     }
 #endif
-
-    size_t prime_count;
-
-    uint32_t *primes =
-        generate_base_primes(root,
-                             &prime_count);
 
     double presieve_want = 0.0;
 
@@ -3157,8 +5064,6 @@ int main(int argc, char **argv)
                 (unsigned long long)
                     (PRESIEVE_BUDGET_BYTES >> 20));
 
-        free(primes);
-
         return EXIT_FAILURE;
     }
 
@@ -3167,736 +5072,39 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "Unable to allocate presieve tables\n");
 
-        free(primes);
-
         return EXIT_FAILURE;
     }
 
-    size_t sieve_start = prime_count < 3 ? prime_count : 3;
+    base_t *base = base_build(isqrt_u64(limit));
 
-    while (sieve_start < prime_count &&
-           primes[sieve_start] <= presieve_max)
-    {
-        sieve_start++;
-    }
+    plan_t pl;
 
-    uint64_t block_bytes =
-        block_set ? block_kb * 1024ULL
-                  : default_block_bytes(threads);
-
-    size_t block_end = sieve_start;
-
-    if (block_bytes)
-    {
-        if (block_max)
-        {
-            block_end = sieve_start + block_max;
-
-            if (block_end > prime_count)
-                block_end = prime_count;
-        }
-        else
-        {
-            uint64_t pmax = block_bytes / BLOCK_MIN_TURNS;
-
-            while (block_end < prime_count &&
-                   primes[block_end] <= pmax)
-            {
-                block_end++;
-            }
-        }
-
-        if (block_end <= sieve_start)
-            block_bytes = 0;
-    }
-
-    uint64_t chunk_bytes =
-        chunk_set ? chunk_kb * 1024ULL
-                  : default_chunk_bytes(threads);
-
-    size_t chunk_end = block_end;
-
-    if (chunk_bytes <= block_bytes)
-        chunk_bytes = 0;
-
-    if (chunk_bytes)
-    {
-        while (chunk_end < prime_count &&
-               primes[chunk_end] <= chunk_bytes)
-        {
-            chunk_end++;
-        }
-
-        if (chunk_end <= block_end)
-            chunk_bytes = 0;
-    }
-
-    uint32_t p_chunk = chunk_bytes ? primes[chunk_end - 1] : 0;
-
-    /* Marge d'un tour complet, celle qu'exige sweep_over. */
-    uint64_t overshoot2 =
-        chunk_bytes ? (uint64_t)p_chunk * 29 / 30 + 1 : 0;
-
-    uint64_t slab_bytes =
-        slab_set ? slab_kb * 1024ULL
-                 : default_slab_bytes(threads);
-
-    size_t slab_end = chunk_end;
-
-    if (!chunk_bytes || slab_bytes <= chunk_bytes)
-        slab_bytes = 0;
-
-    if (slab_bytes)
-    {
-        uint64_t slab_band = slab_bytes * slab_mult;
-
-        while (slab_end < prime_count &&
-               (uint64_t)primes[slab_end] <= slab_band)
-        {
-            slab_end++;
-        }
-
-        if (slab_end <= chunk_end)
-            slab_bytes = 0;
-    }
-
-    /*
-       La plaque peut couvrir jusqu'a sqrt(N) : la bande directe est alors
-       vide, mais la plaque reste utile. L'eteindre renvoyait ses premiers
-       sur le segment entier, deux fois la part de L2 du thread : +1,5 % a
-       10^11 (707 ms contre 691 pour ddd_multi4 a plaque conservee, le
-       2026-09-07). Le segment se dimensionne alors sur le L2, plus bas.
-    */
-
-    uint32_t p_slab = slab_bytes ? primes[slab_end - 1] : 0;
-
-    uint64_t overshoot3 =
-        slab_bytes ? (uint64_t)p_slab * 29 / 30 + 1 : 0;
-
-    if (segment_kb == 0)
-    {
-        uint64_t s =
-            amortized_segment_bytes(primes, slab_end, prime_count);
-
-        if (s)
-        {
-            segment_origin = "amorti auto";
-        }
-        else
-        {
-            uint64_t l2_kb = detect_cache_kb(2);
-
-            if (l2_kb >= MIN_SEGMENT_KB &&
-                l2_kb <= MAX_SEGMENT_KB)
-            {
-                if (slab_bytes)
-                {
-                    /* la plaque vaut la part de L2 du thread : le
-                       segment en porte autant que de threads partageant
-                       ce L2, deux sur le 9700X, comme ddd_multi4 */
-                    s = l2_kb * 1024ULL;
-                    segment_origin = "L2, chemin direct vide (plaque)";
-                }
-                else
-                {
-                    s = l2_kb * 1024ULL / 2;
-                    segment_origin = "L2/2, chemin direct vide";
-                }
-            }
-            else
-            {
-                s = FALLBACK_SEGMENT_KB * 1024ULL;
-                segment_origin = "defaut, chemin direct vide";
-            }
-        }
-
-        {
-            uint64_t l3_kb = detect_cache_kb(3);
-
-            if (l3_kb && threads > 0)
-            {
-                uint64_t share = slab_bytes ? 1ULL : 2ULL;
-
-                uint64_t cap =
-                    l3_kb * 1024ULL / share / (uint64_t)threads;
-
-                if (cap < MIN_SEGMENT_KB * 1024ULL)
-                    cap = MIN_SEGMENT_KB * 1024ULL;
-
-                if (s > cap)
-                {
-                    s = cap;
-
-                    segment_origin =
-                        slab_bytes ? "plafond L3 par thread (plaque)"
-                                   : "plafond L3/2 par thread";
-                }
-            }
-        }
-
-        if (block_bytes)
-        {
-            uint64_t k =
-                (s + block_bytes / 2) / block_bytes;
-
-            if (k == 0)
-                k = 1;
-
-            s = k * block_bytes;
-        }
-
-        segment_kb = s / 1024;
-
-        if (segment_kb < MIN_SEGMENT_KB)
-            segment_kb = MIN_SEGMENT_KB;
-
-        if (segment_kb > MAX_SEGMENT_KB)
-            segment_kb = MAX_SEGMENT_KB;
-    }
-
-    segment_bytes = segment_kb * 1024ULL;
-    segment_bits  = segment_bytes * 8ULL;
-
-    if (block_bytes > segment_bytes)
-    {
-        block_bytes = segment_bytes;
-
-        if (!block_max)
-        {
-            uint64_t pmax = block_bytes / BLOCK_MIN_TURNS;
-
-            block_end = sieve_start;
-
-            while (block_end < prime_count &&
-                   primes[block_end] <= pmax)
-            {
-                block_end++;
-            }
-        }
-
-        if (block_end <= sieve_start)
-            block_bytes = 0;
-    }
-
-    uint32_t p_block =
-        block_bytes ? primes[block_end - 1] : 0;
-
-    uint64_t overshoot =
-        block_bytes
-            ? (uint64_t)p_block * 29 / 30 + 1
-            : 0;
-
-    size_t sorted_count = prime_count - sieve_start;
-
-    uint32_t *sorted =
-        malloc((sorted_count ? sorted_count : 1) * sizeof *sorted);
-
-    if (!sorted)
+    if (!base ||
+        !plan_build(&pl, base, low_limit, limit, &tu, threads, threads))
     {
         fprintf(stderr, "allocation failed\n");
 
-        free(primes);
+        base_free(base);
         presieve_free();
 
         return EXIT_FAILURE;
     }
-
-    size_t class_start[9] = { 0 };
-
-    {
-        size_t count[8] = { 0 };
-
-        for (size_t i = sieve_start; i < prime_count; i++)
-            count[residue_to_index[primes[i] % 30]]++;
-
-        size_t pos[8];
-
-        for (unsigned rc = 0; rc < 8; rc++)
-        {
-            class_start[rc + 1] = class_start[rc] + count[rc];
-            pos[rc] = class_start[rc];
-        }
-
-        for (size_t i = sieve_start; i < prime_count; i++)
-            sorted[pos[residue_to_index[primes[i] % 30]]++] = primes[i];
-    }
-
-    size_t class_mid[8];
-
-    for (unsigned rc = 0; rc < 8; rc++)
-    {
-        size_t i = class_start[rc];
-
-        while (i < class_start[rc + 1] && sorted[i] <= p_block)
-            i++;
-
-        class_mid[rc] = i;
-    }
-
-    if (chunk_bytes > segment_bytes)
-        chunk_bytes = segment_bytes;
-
-    size_t class_mid2[8];
-
-    for (unsigned rc = 0; rc < 8; rc++)
-    {
-        size_t i = class_mid[rc];
-
-        while (i < class_start[rc + 1] && sorted[i] <= p_chunk)
-            i++;
-
-        class_mid2[rc] = i;
-    }
-
-    if (slab_bytes > segment_bytes)
-        slab_bytes = segment_bytes;
-
-    uint64_t bucket_bytes = bucket_set ? bucket_kb * 1024
-                          : (chunk_bytes ? chunk_bytes : slab_bytes);
-
-    if (bucket_bytes > segment_bytes)
-        bucket_bytes = segment_bytes;
-
-    if (bucket_bytes > BUCKET_WINDOW_MAX_BYTES)
-        bucket_bytes = BUCKET_WINDOW_MAX_BYTES;
-
-    if (bucket_bytes)
-    {
-        uint64_t pow2 = 1;
-
-        while (pow2 * 2 <= bucket_bytes)
-            pow2 *= 2;
-
-        bucket_bytes = pow2;
-
-        while (bucket_bytes && segment_bytes % bucket_bytes)
-            bucket_bytes >>= 1;
-    }
-
-    unsigned bucket_shift = 0;
-
-    for (uint64_t v = bucket_bytes; v > 1; v >>= 1)
-        bucket_shift++;
-
-    if (!sorted_count)
-        bucket_bytes = 0;
-
-    int wheel210 = (presieve_max >= 7 && g_pre_passes);
-
-    if (!wheel210)
-        bucket_bytes = 0;
-
-    int bucket_alloc_failed = 0;
-
-    size_t class_mid3[8];
-
-    for (unsigned rc = 0; rc < 8; rc++)
-    {
-        size_t i = class_mid2[rc];
-
-        while (i < class_start[rc + 1] && sorted[i] <= p_slab)
-            i++;
-
-        class_mid3[rc] = i;
-    }
-
-    uint64_t p_bucket_want =
-        bucket_mult ? bucket_bytes * bucket_mult : segment_bytes * 5 / 2;
-
-    uint32_t p_bucket =
-        bucket_bytes && p_bucket_want < UINT32_MAX
-            ? (uint32_t)p_bucket_want
-            : 0;
-
-    size_t class_mid4[8];
-
-    uint64_t bucket_primes = 0;
-
-    for (unsigned rc = 0; rc < 8; rc++)
-    {
-        size_t i = class_mid3[rc];
-
-        if (p_bucket)
-            while (i < class_start[rc + 1] && sorted[i] <= p_bucket)
-                i++;
-        else
-            i = class_start[rc + 1];
-
-        class_mid4[rc] = i;
-
-        bucket_primes += class_start[rc + 1] - i;
-    }
-
-    size_t tbase[8];
-
-    size_t turn_count = 0;
-
-    for (unsigned rc = 0; rc < 8; rc++)
-    {
-        tbase[rc]   = turn_count;
-        turn_count += class_mid3[rc] - class_start[rc];
-    }
-
-    size_t toff[8];
-
-    for (unsigned rc = 0; rc < 8; rc++)
-        toff[rc] = class_start[rc] - tbase[rc];
-
-    uint32_t *turn =
-        malloc((turn_count ? turn_count : 1)
-               * TURN_SLOTS * sizeof *turn);
-
-    if (!turn)
-    {
-        fprintf(stderr, "allocation failed\n");
-
-        free(primes);
-        free(sorted);
-        presieve_free();
-
-        return EXIT_FAILURE;
-    }
-
-    for (unsigned rc = 0; rc < 8; rc++)
-    {
-        build_turn_offsets(sorted + class_start[rc],
-                           class_mid3[rc] - class_start[rc],
-                           turn + tbase[rc] * TURN_SLOTS);
-    }
-
-    build_wheel210();
-
-    uint64_t total = 0;
-
-    if (2 >= low_limit && 2 <= limit) total++;
-    if (3 >= low_limit && 3 <= limit) total++;
-    if (5 >= low_limit && 5 <= limit) total++;
-
-    for (int i = 0; i < g_pre_count; i++)
-    {
-        if (g_pre_primes[i] >= low_limit &&
-            g_pre_primes[i] <= limit)
-        {
-            total++;
-        }
-    }
-
-    uint64_t total_candidates =
-        wheel_count(limit);
-
-    uint64_t first_candidate =
-        low_limit > 1 ? wheel_count(low_limit - 1) : 0;
-
-    /* Le crible demarre sur une frontiere d'octet ; les bits candidats situes
-       sous low_limit sont effaces apres coup. */
-    uint64_t sieve_first = first_candidate & ~(uint64_t)7;
-
-    uint64_t skip_bits = first_candidate - sieve_first;
-
-    uint64_t work_candidates = total_candidates - sieve_first;
-
-    uint64_t total_segments =
-        (work_candidates + segment_bits - 1) / segment_bits;
-
-    uint64_t chunk_segments;
-
-    if (chunk_override)
-    {
-        /* Plafonne a la plage entiere : au-dela, chunk_segments *
-           segment_bits deborde et chunk_candidates retombe sous la
-           taille reelle, ne criblant qu'une partie du domaine. */
-        chunk_segments =
-            chunk_override < total_segments ? chunk_override
-                                            : total_segments;
-
-        if (chunk_segments == 0)
-            chunk_segments = 1;
-    }
-    else
-    {
-        uint64_t target =
-            (uint64_t)threads * CHUNKS_PER_THREAD;
-
-        chunk_segments = (total_segments + target - 1) / target;
-
-        if (chunk_segments == 0)
-            chunk_segments = 1;
-
-        /* Sans premier a seau il n'y a rien a reposer : le decoupage ne
-           bouge pas. La contrainte ne mord donc que sur les intervalles
-           etroits a borne haute, ou la repose domine le criblage. */
-        if (bucket_primes)
-        {
-            uint64_t need =
-                (bucket_primes * BUCKET_AMORT + segment_bits - 1)
-                / segment_bits;
-
-            uint64_t floor_target =
-                (uint64_t)threads * MIN_CHUNKS_PER_THREAD;
-
-            uint64_t cap =
-                (total_segments + floor_target - 1) / floor_target;
-
-            if (cap == 0)
-                cap = 1;
-
-            if (need > cap)
-                need = cap;
-
-            if (need > chunk_segments)
-                chunk_segments = need;
-        }
-    }
-
-    uint64_t chunk_count =
-        (total_segments + chunk_segments - 1) / chunk_segments;
-
-    uint64_t chunk_candidates = chunk_segments * segment_bits;
-
-    uint64_t ring_slots = 1;
-
-    if (bucket_bytes)
-    {
-        /* L'anneau est indexe depuis le debut du segment, sa fente 0, et
-           doit couvrir deux portees. Le saut d'un premier entre deux marques
-           d'abord : l'ecart maximal des residus de la roue 210 vaut 10, soit
-           p / 3 octets, que 2p majore largement. L'activation ensuite, qui
-           pose la premiere marque en p * p, donc n'importe ou dans le
-           segment. */
-        uint64_t need =
-            (segment_bytes + 2 * (uint64_t)primes[prime_count - 1])
-            / bucket_bytes + 4;
-
-        uint64_t cap_windows =
-            (chunk_candidates / 8 + bucket_bytes - 1) / bucket_bytes + 2;
-
-        if (need > cap_windows)
-            need = cap_windows;
-
-        while (ring_slots < need)
-            ring_slots <<= 1;
-    }
-
-
-    int alloc_failed = 0;
 
     uint64_t found = 0;
 
-#ifdef _OPENMP
-#   pragma omp parallel reduction(+:found)
-#endif
-    {
-        uint8_t *bits =
-            aligned_alloc(64, segment_bytes + 64);
-
-        wheel_cursor_t *cursor =
-            malloc((sorted_count ? sorted_count : 1) * sizeof *cursor);
-
-        bucket_ring_t ring;
-
-        memset(&ring, 0, sizeof ring);
-
-        ring.slots = ring_slots;
-        ring.win   = bucket_bytes;
-        ring.shift = bucket_shift;
-
-        /* Deux residus consecutifs de la roue 210 sont distants d'au moins
-           2 : le pas d'un premier a seau vaut au moins 2 * (p / 30) octets. */
-        ring.one   = 2 * (uint64_t)(p_bucket / 30) >= bucket_bytes;
-
-        if (bucket_bytes)
-        {
-            ring.cur = calloc((size_t)ring_slots, sizeof *ring.cur);
-
-            if (!ring.cur)
-            {
-#ifdef _OPENMP
-#               pragma omp atomic write
-#endif
-                bucket_alloc_failed = 1;
-            }
-        }
-
-        int bucket_failed = 0;
-
-        if (!bits || !cursor)
-        {
-#ifdef _OPENMP
-#           pragma omp atomic write
-#endif
-            alloc_failed = 1;
-        }
-
-#ifdef _OPENMP
-#       pragma omp for schedule(dynamic, 1)
-#endif
-        for (int64_t c = 0; c < (int64_t)chunk_count; c++)
-        {
-            int stop;
-
-#ifdef _OPENMP
-#           pragma omp atomic read
-#endif
-            stop = alloc_failed;
-
-            if (stop)
-                continue;
-
-            uint64_t chunk_first =
-                sieve_first + (uint64_t)c * chunk_candidates;
-
-            uint64_t chunk_end =
-                chunk_first + chunk_candidates;
-
-            if (chunk_end > total_candidates)
-                chunk_end = total_candidates;
-
-            size_t active[8];
-
-            for (unsigned rc = 0; rc < 8; rc++)
-                active[rc] = class_start[rc];
-
-            uint64_t chunk_windows = 0;
-
-            if (ring.cur)
-            {
-                for (uint64_t i = 0; i < ring_slots; i++)
-                {
-                    bucket_entry_t *p = ring.cur[i];
-
-                    ring.cur[i] = NULL;
-
-                    for (bucket_block_t *b = p ? BUCKET_BLOCK_OF(p) : NULL;
-                         b; )
-                    {
-                        bucket_block_t *prev = b->next;
-
-                        b->next  = ring.stock;
-                        ring.stock = b;
-                        b = prev;
-                    }
-                }
-
-                chunk_windows =
-                    ((chunk_end - chunk_first + 7) / 8 + bucket_bytes - 1)
-                    / bucket_bytes;
-            }
-
-            uint64_t segment_first = chunk_first;
-
-            while (segment_first < chunk_end)
-            {
-                uint64_t segment_last =
-                    segment_first + segment_bits - 1;
-
-                if (segment_last >= chunk_end)
-                    segment_last = chunk_end - 1;
-
-                uint64_t low =
-                    index_to_number(segment_first);
-
-                uint64_t high =
-                    index_to_number(segment_last);
-
-                if (high > limit)
-                    high = limit;
-
-                uint64_t actual_bits =
-                    segment_last - segment_first + 1;
-
-                uint64_t actual_bytes =
-                    (actual_bits + 7) >> 3;
-
-                if (g_pre_passes)
-                {
-                    presieve_fill(bits,
-                                  actual_bytes,
-                                  segment_first >> 3);
-                }
-                else
-                {
-                    memset(bits, 0xFF, actual_bytes);
-                }
-
-                sieve_segment(
-                    bits,
-                    segment_first,
-                    actual_bytes,
-                    low,
-                    high,
-                    sorted,
-                    turn,
-                    toff,
-                    class_start,
-                    class_mid,
-                    class_mid2,
-                    class_mid3,
-                    class_mid4,
-                    active,
-                    cursor,
-                    block_bytes,
-                    chunk_bytes,
-                    slab_bytes,
-                    overshoot,
-                    overshoot2,
-                    overshoot3,
-                    ring.cur ? &ring : NULL,
-                    ((segment_first - chunk_first) / 8) / (bucket_bytes ?
-                                                           bucket_bytes : 1),
-                    chunk_windows,
-                    &bucket_failed
-                );
-
-                if (bucket_failed)
-                {
-#ifdef _OPENMP
-#                   pragma omp atomic write
-#endif
-                    bucket_alloc_failed = 1;
-                }
-
-                if (segment_first == sieve_first)
-                {
-                    for (uint64_t b = 0; b < skip_bits; b++)
-                        clear_bit(bits, b);
-                }
-
-                if (segment_first == 0)
-                {
-                    clear_bit(bits, 0);
-                }
-
-                found += count_set_bits(
-                    bits,
-                    actual_bits
-                );
-
-                segment_first = segment_last + 1;
-            }
-        }
-
-        free(bits);
-        free(cursor);
-        bucket_ring_free(&ring);
-    }
-
-    if (bucket_alloc_failed)
-        alloc_failed = 1;
-
-    if (alloc_failed)
+    if (!engine_count(&pl, &found))
     {
         fprintf(stderr,
                 "Unable to allocate per-thread buffers\n");
 
-        free(primes);
-        free(sorted);
-        free(turn);
+        plan_free(&pl);
+        base_free(base);
         presieve_free();
 
         return EXIT_FAILURE;
     }
 
-    total += found;
+    uint64_t total = pl.small_total + found;
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
 
@@ -3925,7 +5133,7 @@ int main(int argc, char **argv)
                    (unsigned long long)low_limit,
                    (unsigned long long)limit,
                    threads,
-                   (unsigned long long)segment_kb,
+                   (unsigned long long)pl.segment_kb,
                    when);
         }
         else
@@ -3935,13 +5143,12 @@ int main(int argc, char **argv)
                    (unsigned long long)total,
                    (unsigned long long)limit,
                    threads,
-                   (unsigned long long)segment_kb,
+                   (unsigned long long)pl.segment_kb,
                    when);
         }
 
-        free(primes);
-        free(sorted);
-        free(turn);
+        plan_free(&pl);
+        base_free(base);
         presieve_free();
 
         return EXIT_SUCCESS;
@@ -3971,56 +5178,56 @@ int main(int argc, char **argv)
     printf("\n");
 
     printf("Segment: %llu KiB bitset (par thread, %s)\n",
-           (unsigned long long)segment_kb,
-           segment_origin);
+           (unsigned long long)pl.segment_kb,
+           pl.segment_origin);
 
     printf("Candidates/segment: %llu\n",
-           (unsigned long long)segment_bits);
+           (unsigned long long)pl.segment_bits);
 
-    if (block_bytes)
+    if (pl.block_bytes)
     {
         printf("L1 block: %llu KiB, %llu prime(s) blocked, p <= %u\n",
-               (unsigned long long)(block_bytes / 1024),
-               (unsigned long long)(block_end - sieve_start),
-               p_block);
+               (unsigned long long)(pl.block_bytes / 1024),
+               (unsigned long long)pl.n_block,
+               pl.p_block);
     }
     else
     {
         printf("L1 block: off\n");
     }
 
-    if (chunk_bytes)
+    if (pl.chunk_bytes)
     {
         printf("L2 chunk: %llu KiB, %llu prime(s), p <= %u\n",
-               (unsigned long long)(chunk_bytes / 1024),
-               (unsigned long long)(chunk_end - block_end),
-               p_chunk);
+               (unsigned long long)(pl.chunk_bytes / 1024),
+               (unsigned long long)pl.n_chunk,
+               pl.p_chunk);
     }
     else
     {
         printf("L2 chunk: off\n");
     }
 
-    if (slab_bytes)
+    if (pl.slab_bytes)
     {
         printf("L2 slab: %llu KiB, %llu prime(s), p <= %u\n",
-               (unsigned long long)(slab_bytes / 1024),
-               (unsigned long long)(slab_end - chunk_end),
-               p_slab);
+               (unsigned long long)(pl.slab_bytes / 1024),
+               (unsigned long long)pl.n_slab,
+               pl.p_slab);
     }
     else
     {
         printf("L2 slab: off\n");
     }
 
-    if (bucket_bytes)
+    if (pl.bucket_bytes)
     {
         printf("Seaux: fenetre %llu KiB, %llu anneau(x), p > %u, "
                "%llu premier(s), marche roue 210\n",
-               (unsigned long long)(bucket_bytes / 1024),
-               (unsigned long long)ring_slots,
-               p_bucket,
-               (unsigned long long)bucket_primes);
+               (unsigned long long)(pl.bucket_bytes / 1024),
+               (unsigned long long)pl.ring_slots,
+               pl.p_bucket,
+               (unsigned long long)pl.bucket_primes);
     }
     else
     {
@@ -4044,16 +5251,17 @@ int main(int argc, char **argv)
     }
 
     printf("Chunks: %llu of %llu segment(s)\n",
-           (unsigned long long)chunk_count,
-           (unsigned long long)chunk_segments);
+           (unsigned long long)pl.chunk_count,
+           (unsigned long long)pl.chunk_segments);
 
     printf("Time: %.6f s\n",
            elapsed_seconds(&t0, &t1));
 
-    free(primes);
-    free(sorted);
-    free(turn);
+    plan_free(&pl);
+    base_free(base);
     presieve_free();
 
     return EXIT_SUCCESS;
 }
+
+#endif /* ROUE12_LIB */
