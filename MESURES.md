@@ -10,6 +10,15 @@ rester lisible isolément.
 
 ---
 
+> **C4 est périmée sur deux points depuis `e891c21` (2026-11-21), et n'a pas
+> été rejouée.** Les lignes `-s 32` du coût des étages : une bande d'étage suit
+> désormais sa fenêtre quand le segment la borne, et `-s 32` coûte moins. Les
+> fenêtres étroites à borne haute : l'activation des premiers à seau n'a plus
+> de branchement sur le test « dans le chunk ». Le dimensionnement par défaut
+> est inchangé — sortie `-v` identique sur 23 configurations. Les seuls
+> chiffres disponibles viennent d'une autre machine et sont dans
+> `HISTORIQUE.md` ; rien ci-dessous n'a été remesuré sur le 9700X.
+
 ## Campagne C4 — 2026-08-30
 
 Remplace C3, périmée par deux changements du criblage : `bdccb6f`, qui élargit

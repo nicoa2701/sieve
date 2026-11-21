@@ -9,6 +9,115 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-11-21 — `e891c21` · Les fonctions de crible dans roue12 · quatre déplacements de coût, dont un déjà fermé une fois
+
+roue12 devient aussi une bibliothèque. Le programme `compte` calcule π(x) par
+les méthodes combinatoires et s'appuie sur la bibliothèque `crible` pour cinq
+fonctions ; `roue12.h` les déclare sous les mêmes noms et les mêmes signatures,
+portées par le moteur de roue12, et `make lib` construit `libroue12.a`. Quatre
+choix arrêtés avant d'écrire : les cinq fonctions et pas les autres, les noms de
+`crible.h` tels quels, un seul fichier (`-DROUE12_LIB` retire la ligne de
+commande), et la borne de 10¹⁶ gardée, avec un statut d'erreur au-delà.
+
+**Provenance, et sa limite.** Commit `e891c21` · 2026-11-21 · **pas le 9700X** :
+un poste de développement sous WSL2, 16 CPU logiques, AVX2 sans AVX-512, modèle
+non relevé. `perf` n'y donne que l'échantillonnage par l'horloge — aucun
+compteur matériel. Tous les chiffres de cette entrée sont donc indicatifs, pris
+en meilleur temps d'une seule série, et les colonnes « avant » sont des états
+intermédiaires de la session, jamais commités. Aucune campagne ne les porte.
+
+**`main()` démonté sans toucher aux boucles.** L'orchestration sort en trois
+pièces — le plan, ce qu'un thread possède, le parcours d'un chunk. Garde-fou :
+la sortie `-v` comparée à celle de `5dbf4d5` sur 23 configurations, `-m`,
+`-b 0`, `-B 0`, `-S 0`, `-K 0`, `-J`, `-L`, `-s 4096` et `-p` compris. Identique
+partout, et π(10¹¹) reste à 1,30 s.
+
+**Premier relevé : l'avantage de 10¹¹ ne se transporte pas.** À 10¹¹ roue12
+compte en 1,34 s contre 2,26 s pour crible. Sur les appels de compte — étroits,
+répétés, sur le thread appelant — il perdait : `crible_foreach_seg` sur
+15 728 640 entiers, 1,52 / 2,44 / 8,61 ms aux départs 10⁶, 10⁹ et 10¹², contre
+1,22 / 2,14 / 5,49. Trois causes, trouvées par ablation puis confirmées au
+profil :
+
+- **le segment de 32 Kio que compte impose.** Il le passe pour empêcher crible
+  de lancer des threads ; roue12 n'en lance jamais dans ces fonctions.
+  `segment_bytes` devient un plancher et roue12 choisit son segment ;
+- **des bandes d'étage que le segment ne bornait pas.** La tranche et la plaque
+  tirent leur bande des caches. Avec `-s 32` la plaque gardait 38 229 premiers
+  de tour jusqu'à 640 Kio, parcourus à chaque segment pour moins de deux
+  marques : 7,5 ms de criblage contre 5,0 sans elle. Une bande suit désormais
+  sa fenêtre. Ne mord qu'avec un segment plus petit que la plaque ;
+- **une extraction scalaire**, un `ctz` par premier, deux fois plus lente que
+  celle de crible. Reprise en AVX2 sur le modèle de la sienne.
+
+Après : 1,02 / 1,45 / 3,47 ms. Effet de bord sur la ligne de commande,
+`[10¹², +10⁹] -s 32` passe de 51,2 à 37,4 ms : **les lignes `-s 32` de C4 sont
+périmées.**
+
+**`crible_count_points` : la mise en route, pas le criblage.** Sur 2²⁶ entiers
+près de 10¹⁶, 97,4 ms contre 79,5 pour crible, et le profil donnait 72 % de
+l'appel hors criblage : premiers de base régénérés et retriés à chaque appel,
+puis activés un à un. Deux changements :
+
+- les premiers sont rangés par classe dès l'extraction — le rang du bit dans
+  l'octet *est* la classe — et les bandes se trouvent par dichotomie. **Annoncé
+  à 11 %, mesuré à 2 %** : la mémoire fraîche des tableaux coûtait autant que
+  le tri qu'ils remplaçaient ;
+- l'API garde la base d'un appel à l'autre et la partage entre threads, 23 Mo
+  au plus. C'est là qu'est le gain, et il a fallu ranger les curseurs sans
+  trou : un petit plan sur une grande base en aurait alloué 40 Mo par appel.
+
+```
+  crible_count_points, 2^26 entiers, 64 points, ms
+  depart        avant    base gardee   activation    crible
+  1e10           5,41        5,37         5,37        7,38
+  1e12          10,67       10,29        10,24       11,45
+  1e13          15,81       15,11        15,14       16,24
+  1e14          23,38       21,06        21,10       24,88
+  1e15          40,86       36,67        32,49       42,60
+  1e16 - 1e8    97,36       68,58        53,61       79,24
+```
+
+**L'activation, rouverte.** L'entrée du 2026-08-29 l'avait fermée sur « la
+division n'était pas le coût », avec le trafic mémoire pour suspect. La première
+moitié tient : ici la division seule vaut 12,5 ms sur les 39 de l'activation, et
+une division flottante vectorisée par paquets est *plus lente*, 28,5 ms contre
+24,2. La seconde ne tient pas dans ce régime : un préchargement en écriture des
+seaux ne change rien, 39,0 à 39,7 ms à toutes les distances.
+
+Le coût est une branche. Près de 10¹⁶, un chunk de 2²⁶ entiers ne garde que
+41 % de ses 5 526 085 premiers à seau, et le test « dans le chunk » bascule une
+fois sur trois :
+
+```
+  calcul + branche + compteur par fenetre     34,65 ms
+  le meme, sans branche                       15,25 ms
+```
+
+L'entrée est désormais toujours écrite, dans son seau ou dans un seau perdu qui
+n'avance pas. `bucket_activate` passe de 39,1 à 24,2 ms. **Une erreur en
+chemin** : le premier essai sans branche était plus lent que l'original, 44,8 ms
+— il en gardait une, cachée dans le `in && bloc plein` du test d'ouverture.
+
+Le gain ne vaut que là où la branche est imprévisible, donc sur chunk étroit à
+borne haute : `[9·10¹⁵, +10¹⁰]` passe de 663–698 à 619–628 ms, `[10¹⁵, +10⁸]` de
+53–76 à 45–46. À `[10¹⁵, +10¹⁰]`, le point de C4, rien de résolu : 467–473
+contre 460–467.
+
+**compte, relié.** Ses 112 tests de ligne de commande et sa suite sur 1 et 16
+threads passent liés à `libroue12.a`. π(10²⁰) sort identique en 51,3 s contre
+53,0 ; l'étape qui passe par `crible_count_points` tombe de 7,00 à 5,13 s. Le
+reste est le crible propre à compte : 3 % au total.
+
+**Campagnes.** Le dimensionnement par défaut n'a pas bougé, mais C4 est périmée
+sur deux points — ses lignes `-s 32`, et ses fenêtres étroites à borne haute —
+et rien n'a été remesuré sur le 9700X. Une campagne y est due.
+
+**Ce qui n'est pas fait.** Le chemin AVX-512 du pré-crible n'a pas tourné sur
+cette machine. La CI ne construit ni la bibliothèque ni `make check-api`. Et
+l'activation pèse encore 4,4 ns par premier près de 10¹⁶, dont 2,3 de division,
+sans piste simple pour descendre.
+
 ## 2026-09-14 — `65ee584` · Comptage complet remesuré après la marque unique
 
 Le tableau de la vitrine datait de `e49cff4`. Les cinq bornes sont remesurées
