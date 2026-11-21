@@ -35,7 +35,7 @@ else
 SIMD_TIER := C portable, cible scalaire
 endif
 
-.PHONY: all clean run12 simd check sanitize force lib check-api check-crible
+.PHONY: all clean run12 simd check sanitize force lib check-api check-crible check-arith check-haut
 
 # compte, quand son depot est range a cote (count/, et sieve/ pour son
 # en-tete) : make le relie a libroue12.a et pose le binaire ici. Absent, make
@@ -98,12 +98,26 @@ test_api: test_api.c roue12.h libroue12.a
 check-api: test_api
 	./test_api
 
+# Les calculs de l'activation qui frolent 2^64, contre une reference sur 128
+# bits : aucun premier de base, une seconde.
+test_arith: test_arith.c main12.c roue12.h
+	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) $(PTHREAD) -DSINK_TAIL=$(SINK) -o $@ test_arith.c -lm
+
+check-arith: test_arith
+	./test_arith
+
+# Les bornes hautes, 10^19 et le voisinage de 2^64 : 813 Mo de premiers de
+# base, 1,6 Go le temps de les construire. A lancer sur une machine qui les a.
+check-haut: test_api roue12
+	./test_api haut
+	HAUT=1 sh check.sh
+
 # Le meme programme lie a crible : les deux bibliotheques doivent sortir les
 # memes resumes. Demande $(CRIBLE_LIB), que ce Makefile ne construit pas.
 check-crible: test_api
 	$(CC) $(CFLAGS) $(ARCH) $(PTHREAD) -o test_api-crible test_api.c $(CRIBLE_LIB) -lm
-	./test_api | grep '^D ' > .resume-roue12
-	./test_api-crible ref | grep '^D ' > .resume-crible
+	./test_api $(NIVEAU) | grep '^D ' > .resume-roue12
+	./test_api-crible ref $(NIVEAU) | grep '^D ' > .resume-crible
 	@if cmp -s .resume-roue12 .resume-crible; then \
 	    echo "roue12 et crible : `wc -l < .resume-roue12` resumes identiques"; \
 	    rm -f .resume-roue12 .resume-crible; \
@@ -134,4 +148,4 @@ sanitize: main12.c
 
 clean:
 	rm -f roue12 main12.o roue12-asan roue12-asan-sink .build-flags
-	rm -f main12-lib.o libroue12.a test_api test_api-crible compte
+	rm -f main12-lib.o libroue12.a test_api test_api-crible compte test_arith

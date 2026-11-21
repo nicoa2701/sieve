@@ -8,8 +8,9 @@
  * Edition des liens : libroue12.a -fopenmp -lm.
  *
  * Ce qui differe de crible :
- *   - la borne haute est 10^16 et non 2^64 - 1 : au-dela, les fonctions
- *     rendent CRIBLE_EUNSUPPORTED sans rien calculer ;
+ *   - la borne haute est 2^64 - 1, comme crible, mais les premiers de base
+ *     y pesent : 203 millions de premiers, 813 Mo gardes, et 1,6 Go le temps
+ *     de les construire ;
  *   - crible_foreach_seg ne parcourt que les premiers (k = 1) ; k = 2..6 rend
  *     CRIBLE_EUNSUPPORTED ;
  *   - crible_count_points et crible_foreach_seg ne lancent jamais de thread,
@@ -21,8 +22,9 @@
  *     son segment et ne descend pas en dessous.
  *
  * Les premiers de base sont gardes d'un appel a l'autre et partages entre les
- * threads : une seule table, la plus large demandee jusqu'ici, au plus 23 Mo
- * (les premiers jusqu'a 10^8). Elle n'est rendue qu'a la fin du processus.
+ * threads : une seule table, la plus large demandee jusqu'ici — 23 Mo pour
+ * cribler jusqu'a 10^16, 813 Mo jusqu'a 2^64 - 1 (les premiers jusqu'a 2^32).
+ * Elle n'est rendue qu'a la fin du processus.
  *
  * Toutes les fonctions sont sures en contexte multi-thread, sauf
  * crible_set_threads, qui modifie un reglage global.
@@ -48,11 +50,12 @@ typedef enum {
     CRIBLE_EOVERFLOW = 2,    /* jamais rendu par roue12 */
     CRIBLE_EUNDERFLOW = 3,   /* jamais rendu par roue12 */
     CRIBLE_EINTERNAL = 4,    /* jamais rendu par roue12 */
-    CRIBLE_EUNSUPPORTED = 5  /* borne au-dela de 10^16, ou k-uplets (k >= 2) */
+    CRIBLE_EUNSUPPORTED = 5  /* k-uplets (k >= 2), ou seaux hors service
+                                au-dela de 4,6e18 */
 } crible_status;
 
-/* Borne haute admise par toutes les fonctions : 10^16. */
-#define ROUE12_MAX_LIMIT 10000000000000000ULL
+/* Borne haute admise par toutes les fonctions : 2^64 - 1. */
+#define ROUE12_MAX_LIMIT 18446744073709551615ULL
 
 /*
  * Nombre de threads de crible_count_primes : 0 = tous les processeurs logiques

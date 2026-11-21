@@ -6,8 +6,10 @@
  *    bornes.
  * 2) Les lignes "D ..." resument tous les resultats. Le meme programme, lie a
  *    libcrible.a et lance avec l'argument "ref", doit sortir les memes :
- *    c'est ce que compare `make check-crible`. En mode "ref" les controles
- *    propres a roue12 (borne 10^16, k >= 2) sont sautes.
+ *    c'est ce que compare `make check-crible`. En mode "ref" le controle
+ *    propre a roue12 (k >= 2) est saute.
+ * 3) Avec l'argument "haut", les bornes hautes : 10^19 et le voisinage de
+ *    2^64. Elles demandent 1,6 Go et plusieurs secondes par appel.
  */
 #include "roue12.h"
 
@@ -735,47 +737,163 @@ static void test_concurrent(void)
     digest("appels simultanes", h);
 }
 
-/* --- Limites propres a roue12 ----------------------------------------- */
+/* --- Au-dela de 10^16 -------------------------------------------------- */
 
-static void test_unsupported(void)
+/* Les trois fonctions sur une fenetre etroite, contre Miller-Rabin. */
+static void test_window(uint64_t a, uint64_t b, uint64_t *h)
 {
-    const uint64_t over = ROUE12_MAX_LIMIT + 1;
+    enum { NP = 12 };
 
-    uint64_t r = 123;
+    uint64_t pts[NP], want[NP], got[NP];
 
-    CHECK(crible_count_primes(0, over, &r) == CRIBLE_EUNSUPPORTED && r == 0,
-          "count_primes au-dela de 10^16");
+    for (int i = 0; i < NP; i++)
+        pts[i] = a + (b - a) / (NP - 1) * (uint64_t)i;
 
-    uint64_t pts[2] = { 100, over }, got[2] = { 7, 7 };
+    pts[NP - 1] = b;
 
-    CHECK(crible_count_points(0, pts, 2, got) == CRIBLE_EUNSUPPORTED,
-          "count_points au-dela de 10^16");
+    uint64_t e = 0;
+    int      k = 0;
+
+    for (uint64_t x = a;; x++)
+    {
+        e += (uint64_t)is_prime(x);
+
+        while (k < NP && pts[k] == x)
+            want[k++] = e;
+
+        if (x == b)
+            break;
+    }
+
+    uint64_t r = count(a, b);
+
+    CHECK(r == e, "count_primes [%" PRIu64 ", %" PRIu64 "] = %" PRIu64
+          ", Miller-Rabin %" PRIu64, a, b, r, e);
+
+    crible_status st = crible_count_points(a, pts, NP, got);
+
+    CHECK(st == CRIBLE_OK, "count_points [%" PRIu64 ", ...] : statut %d",
+          a, (int)st);
+
+    for (int i = 0; i < NP; i++)
+    {
+        CHECK(got[i] == want[i], "count_points [%" PRIu64 ", %" PRIu64
+              "] = %" PRIu64 ", Miller-Rabin %" PRIu64, a, pts[i], got[i],
+              want[i]);
+
+        *h = mix(*h, got[i]);
+    }
 
     walk_t w;
 
-    walk_init(&w, 0, over);
+    walk_init(&w, a, b);
 
-    CHECK(crible_foreach_seg(over - 10, over, 1, 0, walk_cb, &w)
-          == CRIBLE_EUNSUPPORTED && w.n == 0,
-          "foreach_seg au-dela de 10^16");
+    w.test_primality = 1;
+
+    st = crible_foreach_seg(a, b, 1, 32768, walk_cb, &w);
+
+    CHECK(st == CRIBLE_OK && w.n == e && w.ordered && w.in_range &&
+          w.all_prime,
+          "foreach_seg [%" PRIu64 ", %" PRIu64 "] : %" PRIu64
+          " recus, Miller-Rabin %" PRIu64 "%s%s%s", a, b, w.n, e,
+          w.ordered ? "" : ", desordre",
+          w.in_range ? "" : ", hors intervalle",
+          w.all_prime ? "" : ", un compose");
+
+    *h = mix(mix(*h, r), w.hash);
+}
+
+/* Au-dela de l'ancienne borne, sans peser : deux fenetres de 30 000 entiers. */
+static void test_above(void)
+{
+    uint64_t h = FNV_BASIS;
+
+    uint64_t a = 20000000000000000ULL + rnd() % 1000000;
+
+    test_window(a, a + 30000, &h);
+
+    a = 100000000000000000ULL + rnd() % 1000000;
+
+    test_window(a, a + 30000, &h);
+
+    digest("au-dela de 1e16", h);
+}
+
+/*
+ * Les bornes hautes : 10^18 sur une fenetre large, 10^19, et le voisinage de
+ * 2^64 ou low + p et p * m debordent 64 bits. Tous les premiers jusqu'a 2^32
+ * y passent — 813 Mo gardes, 1,6 Go le temps de les construire, et plusieurs
+ * secondes par appel. Seulement avec l'argument « haut ».
+ */
+static void test_haut(void)
+{
+    static const struct { uint64_t a, b, want; } t[] =
+    {
+        { 1000000000000000000ULL, 1000000000000000000ULL + 1000000000,
+          24127085 },
+        { 10000000000000000000ULL, 10000000000000000000ULL + 1000000000,
+          22854258 },
+        { 18446744072709551615ULL, 18446744073709551615ULL, 22537866 },
+        { 18446744073709551557ULL, 18446744073709551615ULL, 1 },
+        { 18446744073709551558ULL, 18446744073709551615ULL, 0 },
+        { 18446744073709551615ULL, 18446744073709551615ULL, 0 },
+    };
+
+    uint64_t h = FNV_BASIS;
+
+    for (size_t i = 0; i < sizeof t / sizeof t[0]; i++)
+    {
+        uint64_t r = count(t[i].a, t[i].b);
+
+        CHECK(r == t[i].want, "count_primes [%" PRIu64 ", %" PRIu64 "] = %"
+              PRIu64 ", attendu %" PRIu64, t[i].a, t[i].b, r, t[i].want);
+
+        h = mix(h, r);
+    }
+
+    /* Le sommet de la plage, jusqu'au dernier entier. */
+    test_window(UINT64_MAX - 30000, UINT64_MAX, &h);
+
+    /* Juste sous le sommet, puis de part et d'autre de 2^63 et de (2^31)^2. */
+    uint64_t a = UINT64_MAX - 5000000000ULL - rnd() % 1000000;
+
+    test_window(a, a + 30000, &h);
+    test_window(9223372036854775808ULL - 15000,
+                9223372036854775808ULL + 15000, &h);
+    test_window(4611686018427387904ULL - 15000,
+                4611686018427387904ULL + 15000, &h);
+    a = 1000000000000000000ULL + rnd() % 1000000;
+
+    test_window(a, a + 30000, &h);
+
+    digest("bornes hautes", h);
+}
+
+/* --- Limite propre a roue12 -------------------------------------------- */
+
+static void test_unsupported(void)
+{
+    walk_t w;
+
+    walk_init(&w, 0, 100);
+
     CHECK(crible_foreach_seg(0, 100, 2, 0, walk_cb, &w)
           == CRIBLE_EUNSUPPORTED && w.n == 0,
           "foreach_seg k = 2");
-
-    /* La borne elle-meme est admise. */
-    uint64_t e = 0;
-
-    for (uint64_t x = ROUE12_MAX_LIMIT - 1000; x <= ROUE12_MAX_LIMIT; x++)
-        e += (uint64_t)is_prime(x);
-
-    CHECK(crible_count_primes(ROUE12_MAX_LIMIT - 1000, ROUE12_MAX_LIMIT, &r)
-          == CRIBLE_OK && r == e, "count_primes [10^16 - 1000, 10^16] = %"
-          PRIu64 ", Miller-Rabin %" PRIu64, r, e);
 }
 
 int main(int argc, char **argv)
 {
-    int ref = argc > 1 && !strcmp(argv[1], "ref");
+    int ref  = 0;
+    int haut = 0;
+
+    for (int i = 1; i < argc; i++)
+    {
+        if (!strcmp(argv[i], "ref"))
+            ref = 1;
+        else if (!strcmp(argv[i], "haut"))
+            haut = 1;
+    }
 
     build_naive();
 
@@ -791,6 +909,11 @@ int main(int argc, char **argv)
     test_foreach_high();
 
     test_concurrent();
+
+    test_above();
+
+    if (haut)
+        test_haut();
 
     if (!ref)
         test_unsupported();

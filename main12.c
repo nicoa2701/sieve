@@ -27,6 +27,7 @@
 #include <math.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <errno.h>
 
 #include "roue12.h"
 
@@ -1048,6 +1049,29 @@ static int sweep_bucketed(uint8_t *bits,
 
 
 /*
+ * Les deux calculs de l'activation qui frolent 2^64, isoles pour que
+ * test_arith.c les confronte seuls a une reference sur 128 bits : un crible
+ * pres de la borne demande 813 Mo de premiers de base, eux non.
+ *
+ * Plafond de low / p. low + p - 1 deborderait a moins de 2^32 de 2^64.
+ */
+static inline uint64_t ceil_div_u32(uint64_t low, uint32_t p)
+{
+    return low / p + (low % p != 0);
+}
+
+/*
+ * L'octet du multiple p * (210 q + R), sans former le produit : pres de 2^64
+ * il deborde, le multiple pouvant tomber jusqu'a 11 p au-dela de low.
+ * 210 p q se divise par 30, donc l'octet vaut exactement 7 p q + p R / 30,
+ * ou p q < 2^64 / 210 et p R < 2^40.
+ */
+static inline uint64_t byte_of_multiple210(uint32_t p, uint64_t q, unsigned R)
+{
+    return 7 * ((uint64_t)p * q) + (uint64_t)p * R / 30;
+}
+
+/*
  * Place le curseur sur le premier multiple de p qui soit a la fois >= low et
  * >= p * p, son cofacteur arrondi au residu suivant de la roue.
  */
@@ -1057,7 +1081,7 @@ activate_prime(uint32_t p,
                uint64_t low,
                wheel_cursor_t *c)
 {
-    uint64_t m = (low + p - 1) / p;
+    uint64_t m = ceil_div_u32(low, p);
 
     if (m < p)
         m = p;
@@ -2133,7 +2157,7 @@ static int bucket_activate(const uint32_t *sorted,
 
         /* Une division entiere par premier. La meme en flottant, par paquets
            vectorises, a ete mesuree plus lente : 28,5 ms contre 24,2. */
-        uint64_t m = (low + p - 1) / p;
+        uint64_t m = ceil_div_u32(low, p);
 
         if (m < p)
             m = p;
@@ -2147,10 +2171,10 @@ static int bucket_activate(const uint32_t *sorted,
             j = 0;
         }
 
-        m = 210 * q + residues210[j];
+        /* Le multiple est >= low, donc x >= 0. */
+        const uint64_t x =
+            byte_of_multiple210(p, q, residues210[j]) - first_byte;
 
-        /* p * m >= low, donc x >= 0. */
-        const uint64_t x    = (uint64_t)p * m / 30 - first_byte;
         const uint64_t skip = x >> shift;
 
         /*
@@ -2931,6 +2955,9 @@ typedef struct
     /* Premiers absents du bitset : 2, 3, 5 et ceux du pre-crible. */
     uint64_t small_total;
 
+    /* plan_build a refuse ce reglage plutot qu'echoue a allouer. */
+    int unsupported;
+
     uint64_t total_candidates;
     uint64_t sieve_first;
     uint64_t skip_bits;
@@ -2962,7 +2989,8 @@ static void plan_free(plan_t *pl)
  * dichotomie dans chaque classe, pour qu'un plan sur une base deja construite
  * ne coute presque rien.
  *
- * Rend 0 si une allocation echoue.
+ * Rend 0 si une allocation echoue, ou si le reglage ne peut pas cribler
+ * juste : pl->unsupported les distingue.
  */
 static int plan_build(plan_t *pl,
                       const base_t *base,
@@ -3339,6 +3367,26 @@ static int plan_build(plan_t *pl,
 
         coff[rc]      = class_start[rc] - cursor_count;
         cursor_count += class_mid4[rc] - class_start[rc];
+    }
+
+    /*
+     * Un curseur range sa position sur 32 bits signes, et elle peut depasser
+     * la fin du segment d'un tour, soit p octets. Avec les seaux, aucun
+     * premier a curseur ne depasse 2,5 segments. Sans eux — -K 0, -p sous 7,
+     * un -J demesure — tous en ont un, et au-dela de 2^31 le curseur
+     * deborde : possible des que la borne passe (2^31)^2 = 4,6e18. Le
+     * reglage est refuse plutot que de compter faux.
+     */
+    if (cursor_count)
+    {
+        const uint64_t pcur = RANK_VALUE(sorted_count - bucket_primes);
+
+        if (pcur + segment_bytes >= INT32_MAX)
+        {
+            pl->unsupported = 1;
+
+            return 0;
+        }
     }
 
     size_t tbase[8];
@@ -3875,10 +3923,11 @@ static unsigned g_api_threads;
  *
  * La base grandit par bonds de moitie, pour qu'une suite de morceaux a bornes
  * croissantes ne la refasse pas a chaque pas ; elle ne depasse pas
- * racine(10^16), soit 5,76 millions de premiers et 23 Mo. Elle n'est jamais
- * rendue : le cache garde sa reference jusqu'a la fin du processus.
+ * racine(2^64) : 5,76 millions de premiers et 23 Mo pour cribler jusqu'a
+ * 10^16, 203 millions et 813 Mo jusqu'a 2^64 - 1. Elle n'est jamais rendue :
+ * le cache garde sa reference jusqu'a la fin du processus.
  */
-#define BASE_ROOT_MAX 100000000ULL
+#define BASE_ROOT_MAX 4294967295ULL
 #define BASE_ROOT_MIN 65536ULL
 
 static pthread_mutex_t g_base_mu  = PTHREAD_MUTEX_INITIALIZER;
@@ -4020,17 +4069,16 @@ crible_status crible_count_primes(uint64_t start,
     if (start > stop)
         return CRIBLE_OK;
 
-    if (stop > MAX_LIMIT)
-        return CRIBLE_EUNSUPPORTED;
-
     if (!api_init())
         return CRIBLE_ENOMEM;
 
     int threads = 1;
 
 #ifdef _OPENMP
+    /* La largeur plafonne a 2^64 - 1 : [0, 2^64 - 1] compte 2^64 entiers. */
     threads = default_thread_count((int)crible_get_threads(),
-                                   stop - start + 1,
+                                   stop - start == UINT64_MAX
+                                       ? UINT64_MAX : stop - start + 1,
                                    isqrt_u64(stop));
 #endif
 
@@ -4046,7 +4094,7 @@ crible_status crible_count_primes(uint64_t start,
     {
         base_release(base);
 
-        return CRIBLE_ENOMEM;
+        return pl.unsupported ? CRIBLE_EUNSUPPORTED : CRIBLE_ENOMEM;
     }
 
     uint64_t found = 0;
@@ -4189,9 +4237,6 @@ crible_status crible_count_points(uint64_t start,
 
     uint64_t stop = points[n - 1];
 
-    if (stop > MAX_LIMIT)
-        return CRIBLE_EUNSUPPORTED;
-
     if (!api_init())
         return CRIBLE_ENOMEM;
 
@@ -4219,7 +4264,7 @@ crible_status crible_count_points(uint64_t start,
     {
         base_release(base);
 
-        return CRIBLE_ENOMEM;
+        return pl.unsupported ? CRIBLE_EUNSUPPORTED : CRIBLE_ENOMEM;
     }
 
     points_ctx_t c = { points, counts, n, 0, 0 };
@@ -4370,7 +4415,7 @@ crible_status crible_foreach_seg(uint64_t start,
     if (start > stop || k < 1 || k > 6)
         return CRIBLE_OK;
 
-    if (k != 1 || stop > MAX_LIMIT)
+    if (k != 1)
         return CRIBLE_EUNSUPPORTED;
 
     if (!api_init())
@@ -4407,7 +4452,7 @@ crible_status crible_foreach_seg(uint64_t start,
     {
         base_release(base);
 
-        return CRIBLE_ENOMEM;
+        return pl.unsupported ? CRIBLE_EUNSUPPORTED : CRIBLE_ENOMEM;
     }
 
     foreach_ctx_t c = { cb, ctx, NULL, NULL };
@@ -4447,10 +4492,16 @@ static int parse_bound(const char *s, uint64_t *out)
 {
     char *end;
 
+    errno = 0;
+
     unsigned long long v = strtoull(s, &end, 10);
 
     if (end != s && *end == '\0')
     {
+        /* strtoull sature a 2^64 - 1 au lieu d'echouer. */
+        if (errno == ERANGE)
+            return 0;
+
         *out = (uint64_t)v;
 
         return 1;
@@ -4458,7 +4509,8 @@ static int parse_bound(const char *s, uint64_t *out)
 
     double d = strtod(s, &end);
 
-    if (end == s || *end != '\0' || d <= 0.0 || d >= 1.8e19)
+    /* 2^64 est exact en double ; tout ce qui est en dessous se convertit. */
+    if (end == s || *end != '\0' || d <= 0.0 || d >= 18446744073709551616.0)
         return 0;
 
     *out = (uint64_t)d;
@@ -4637,16 +4689,6 @@ int main(int argc, char **argv)
 
             return EXIT_FAILURE;
         }
-    }
-
-    if (limit > MAX_LIMIT)
-    {
-        fprintf(stderr,
-                "Limit %llu exceeds the maximum %llu\n",
-                (unsigned long long)limit,
-                (unsigned long long)MAX_LIMIT);
-
-        return EXIT_FAILURE;
     }
 
     uint64_t segment_kb = 0;
@@ -5038,7 +5080,8 @@ int main(int argc, char **argv)
     {
         int useful =
             default_thread_count(max_threads,
-                                 limit - low_limit + 1,
+                                 limit - low_limit == UINT64_MAX
+                                     ? UINT64_MAX : limit - low_limit + 1,
                                  isqrt_u64(limit));
 
         if (useful < threads)
@@ -5079,10 +5122,23 @@ int main(int argc, char **argv)
 
     plan_t pl;
 
+    pl.unsupported = 0;
+
     if (!base ||
         !plan_build(&pl, base, low_limit, limit, &tu, threads, threads))
     {
-        fprintf(stderr, "allocation failed\n");
+        if (base && pl.unsupported)
+        {
+            fprintf(stderr,
+                    "Sans seaux, un premier au-dela de 2^31 deborde son "
+                    "curseur : au-dela de 4,6e18,\n"
+                    "laisser -K en service, -p a 7 ou plus et -J a sa "
+                    "valeur automatique\n");
+        }
+        else
+        {
+            fprintf(stderr, "allocation failed\n");
+        }
 
         base_free(base);
         presieve_free();

@@ -204,12 +204,13 @@ else
     printf '  (B2 non couvert : pas de repertoire temporaire ou de cc)\n'
 fi
 
-# B3 : les messages de borne donnent les valeurs exactes, pas un arrondi.
-expect_rc  1 20000000000000000
-expect_out "Limit 20000000000000000 exceeds the maximum 10000000000000000" \
-           20000000000000000
-expect_rc  1 1e16 -d 1e10
-expect_out "Interval end 10000000000000000 + 10000000000 exceeds" 1e16 -d 1e10
+# B3 : les messages de borne donnent les valeurs exactes, pas un arrondi. La
+# borne est 2^64 - 1 : au-dela, la valeur est refusee et non tronquee.
+expect_rc  1 18446744073709551616
+expect_rc  1 1e20
+expect_rc  1 18446744073709551615 -d 1
+expect_out "Interval end 18446744073709551615 + 1 exceeds" \
+           18446744073709551615 -d 1
 expect     0 1e16 -d 0
 
 # B4 : la fenetre de seau reste sous le plafond, quoi qu'on demande.
@@ -232,6 +233,34 @@ expect 455052511  1e10 -s 1024 -J 1
 expect 50847534 1e9 -s 128 -c 17592186044416
 expect 50847534 1e9 -s 128 -c 17592186044417
 expect 50847534 1e9 -s 128 -c 18446744073709551615
+
+printf 'bornes hautes\n'
+
+# Au-dela de 10^16, l'ancienne borne. Trois intervalles etroits, comptes par
+# crible 1.0.
+expect 2664034 20000000000000000 -d 100000000
+expect 25463   100000000000000000 -d 1000000
+expect 24280   1000000000000000000 -d 1000000
+
+# Le voisinage de 2^64 demande tous les premiers jusqu'a 2^32 : 813 Mo, et
+# 1,6 Go le temps de les construire. Seulement sur demande. Les quatre
+# premieres valeurs sont celles des tests de crible.
+if [ -n "$HAUT" ]; then
+    expect 24127085 1000000000000000000 -d 1e9
+    expect 22854258 10000000000000000000 -d 1e9
+    expect 22537866 18446744072709551615 18446744073709551615
+    expect 1        18446744073709551557 18446744073709551615
+    expect 0        18446744073709551558 18446744073709551615
+    expect 0        18446744073709551615 -d 0
+
+    # Sans seaux, un premier au-dela de 2^31 deborderait son curseur : le
+    # reglage est refuse des que la borne passe 4,6e18.
+    expect_rc  1 10000000000000000000 -d 1000000 -K 0
+    expect_out "deborde son curseur" 10000000000000000000 -d 1000000 -K 0
+    expect_rc  1 10000000000000000000 -d 1000000 -p 0
+else
+    printf '  (voisinage de 2^64 non couvert : relancer avec HAUT=1)\n'
+fi
 
 printf '\n%d reussite(s), %d echec(s)\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
