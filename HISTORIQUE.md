@@ -9,6 +9,64 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-11-21 — `bbc78e8` · `make` construit tout, gcc-16 d'abord · et l'entrée précédente revérifiée après rebasage
+
+**Une seule commande.** `make` ne construisait que `roue12` ; la bibliothèque
+demandait `make lib`, et compte un `make` dans son propre dépôt puis une copie,
+qui se périmait sans rien dire. `make` construit maintenant le programme et
+`libroue12.a`, et — quand le dépôt de compte est rangé à côté, dans `count/` —
+relie compte à la bibliothèque et pose le binaire à la racine. Sans `count/`,
+ce qui est le cas de la CI, il s'arrête au programme et à la bibliothèque : la
+CI compile donc désormais aussi le mode bibliothèque, sans encore jouer
+`make check-api`.
+
+**Le compilateur.** Le premier de `gcc-16`, `gcc-15`, `gcc-13` qui soit
+installé, puis `cc`. La détection de `05ef809` est inchangée, seule la liste
+gagne une tête. Le Makefile de compte reçoit le compilateur retenu, pour qu'un
+seul compile tout.
+
+```
+  make                                 -> gcc-16, les trois binaires
+  make, une seconde fois               -> rien de recompile
+  make CC_PREFERRED="gcc-99 gcc-15"    -> gcc-15, repli
+  make CC_PREFERRED="gcc-99 gcc-98"    -> cc
+  make CC=clang                        -> clang
+```
+
+**Deux précautions dans l'appel du Makefile de compte.** Il est lancé avec un
+`MAKEFLAGS` vide : `CFLAGS` et `ARCH` n'y ont pas le même sens qu'ici — son
+`ARCH` est la valeur de `-march`, pas le drapeau — et un `make CFLAGS=...`
+passé à la racine l'aurait traversé. Et il reçoit `ROUE12_PREBUILT`, pour ne pas
+reconstruire la bibliothèque avec ses propres réglages, ce qui aurait fait
+battre le témoin `.build-flags` d'un `make` à l'autre.
+
+**gcc-16 est une préversion sur le poste de cette session**, 16.0.1 du
+2026-03-22. Il n'y est pas départagé de gcc-15 : π(10¹¹) en 1,305 s contre
+1,335, un passage chacun. Les campagnes existantes sont en gcc 15.2.0 ; la
+prochaine devra dire lequel a compilé.
+
+**L'entrée précédente, rejouée.** Les trois commits de l'API ont été rebasés
+sur `25bc620` — dix-neuf commits arrivés entre-temps, dont la marque unique et
+la plaque conservée — et portent depuis les identifiants que cette page cite.
+L'entrée ci-dessous annonce une sortie `-v` identique à celle de `5dbf4d5` :
+c'était vrai avant le rebasage, et ce n'est plus la bonne référence. Rejoué sur
+le code rebasé, face à `25bc620` cette fois :
+
+```
+  sortie -v, 24 configurations         identique a 25bc620
+  make check                           127 / 127
+  make check-api                       17 122 controles, 0 echec
+  make check-crible                    8 resumes identiques
+  ASan + UBSan, SINK_TAIL 0 et 1       0 trouvaille
+  ThreadSanitizer, sans OpenMP         0 trouvaille
+  pi(1e11), trois passages alternes    1,314 a 1,335 s  ->  1,312 a 1,329 s
+  compte lie a roue12                  112 tests CLI, suite sur 16 threads : OK
+```
+
+Même provenance et même limite que l'entrée précédente : le poste sous WSL2,
+pas le 9700X. Les mesures de cette entrée-là n'ont pas été reprises après le
+rebasage ; elles décrivent le code d'avant.
+
 ## 2026-11-21 — `e891c21` · Les fonctions de crible dans roue12 · quatre déplacements de coût, dont un déjà fermé une fois
 
 roue12 devient aussi une bibliothèque. Le programme `compte` calcule π(x) par
