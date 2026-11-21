@@ -2,7 +2,7 @@
 # systeme. Un CC explicite — ligne de commande ou environnement — est toujours
 # honore et court-circuite la detection ; la CI en depend pour sa matrice
 # gcc x clang, et check.sh comme sanitize en heritent.
-CC_PREFERRED ?= gcc-15 gcc-13
+CC_PREFERRED ?= gcc-16 gcc-15 gcc-13
 
 CC_FOUND := $(shell for c in $(CC_PREFERRED); do \
                 command -v $$c >/dev/null 2>&1 && { echo $$c; break; }; \
@@ -37,7 +37,18 @@ endif
 
 .PHONY: all clean run12 simd check sanitize force lib check-api check-crible
 
-all: roue12
+# compte, quand son depot est range a cote (count/, et sieve/ pour son
+# en-tete) : make le relie a libroue12.a et pose le binaire ici. Absent, make
+# ne construit que le programme et la bibliotheque.
+ifneq ($(wildcard count/Makefile),)
+COMPTE := compte
+endif
+
+# Les sources de compte gardent leur cible portable ; ses noyaux s'aiguillent
+# a l'execution.
+COMPTE_ARCH ?= x86-64-v2
+
+all: roue12 libroue12.a $(COMPTE)
 	@echo "Pre-crible : $(SIMD_TIER)   [$(CC) $(ARCH)]"
 
 simd:
@@ -71,6 +82,14 @@ main12-lib.o: main12.c roue12.h .build-flags
 libroue12.a: main12-lib.o
 	rm -f $@
 	ar rcs $@ $^
+
+# Le Makefile de compte recoit le compilateur retenu ici et une bibliotheque
+# deja construite ; MAKEFLAGS est vide pour qu'un CFLAGS ou un ARCH passe a ce
+# make-ci, qui n'ont pas le meme sens chez lui, ne le traversent pas. La copie
+# n'a lieu que si le binaire a change.
+compte: libroue12.a force
+	MAKEFLAGS= $(MAKE) -C count SIEVE=roue12 ROUE12_PREBUILT=1 CC='$(CC)' ARCH='$(COMPTE_ARCH)' build-roue12/compte
+	@cmp -s count/build-roue12/compte $@ || cp count/build-roue12/compte $@
 
 test_api: test_api.c roue12.h libroue12.a
 	$(CC) $(CFLAGS) $(ARCH) $(OPENMP) $(PTHREAD) -o $@ test_api.c libroue12.a -lm
@@ -115,4 +134,4 @@ sanitize: main12.c
 
 clean:
 	rm -f roue12 main12.o roue12-asan roue12-asan-sink .build-flags
-	rm -f main12-lib.o libroue12.a test_api test_api-crible
+	rm -f main12-lib.o libroue12.a test_api test_api-crible compte
