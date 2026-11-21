@@ -37,8 +37,8 @@ make            # -O3 -march=native -fopenmp
 No dependency beyond libc and OpenMP. `make` reports the compiler and the SIMD
 tier picked for the pre-sieve; `make simd` shows the detection in detail.
 
-The compiler is the first of `gcc-15`, `gcc-13` that is installed, falling back
-to the system `cc`. An explicit `CC` always wins — `make CC=clang` — and the
+The compiler is the first of `gcc-16`, `gcc-15`, `gcc-13` that is installed,
+falling back to the system `cc`. An explicit `CC` always wins — `make CC=clang` — and the
 search list is itself overridable: `make CC_PREFERRED="gcc-14 gcc-13"`.
 
 ```bash
@@ -284,8 +284,8 @@ Each of the five stages switches off with `0`.
 
 ## Library
 
-The same file also builds as a library. `make lib` produces `libroue12.a` —
-`main12.c` compiled without its command line — and [`roue12.h`](roue12.h)
+The same file also builds as a library. Along with the program, `make`
+produces `libroue12.a` — `main12.c` compiled without its command line — and [`roue12.h`](roue12.h)
 declares five functions under the names and signatures of the `crible`
 library: a program written against `crible.h` links to roue12 without
 changing a line of source.
@@ -298,7 +298,7 @@ changing a line of source.
 | `crible_set_threads`, `crible_get_threads` | thread cap for `crible_count_primes` |
 
 ```bash
-make lib                              # libroue12.a
+make lib                              # libroue12.a alone
 cc prog.c libroue12.a -fopenmp -lm    # linking
 ```
 

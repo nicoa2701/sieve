@@ -38,8 +38,8 @@ Aucune dépendance en dehors de la libc et d'OpenMP. `make` annonce le
 compilateur et le palier SIMD retenu pour le pré-crible ; `make simd` détaille
 la détection.
 
-Le compilateur est le premier de `gcc-15`, `gcc-13` qui soit installé, à défaut
-le `cc` du système. Un `CC` explicite l'emporte toujours — `make CC=clang` — et
+Le compilateur est le premier de `gcc-16`, `gcc-15`, `gcc-13` qui soit installé,
+à défaut le `cc` du système. Un `CC` explicite l'emporte toujours — `make CC=clang` — et
 la liste de recherche est elle-même surchargeable :
 `make CC_PREFERRED="gcc-14 gcc-13"`.
 
@@ -294,8 +294,8 @@ Chacun des cinq étages s'éteint à `0`.
 
 ## Bibliothèque
 
-Le même fichier donne aussi une bibliothèque. `make lib` construit
-`libroue12.a` — `main12.c` compilé sans sa ligne de commande — et
+Le même fichier donne aussi une bibliothèque. `make` construit avec le
+programme `libroue12.a` — `main12.c` compilé sans sa ligne de commande — et
 [`roue12.h`](roue12.h) déclare cinq fonctions sous les noms et les signatures
 de la bibliothèque `crible` : un programme écrit contre `crible.h` se relie à
 roue12 sans changer une ligne de source.
@@ -308,7 +308,7 @@ roue12 sans changer une ligne de source.
 | `crible_set_threads`, `crible_get_threads` | plafond de threads de `crible_count_primes` |
 
 ```bash
-make lib                              # libroue12.a
+make lib                              # libroue12.a seule
 cc prog.c libroue12.a -fopenmp -lm    # édition des liens
 ```
 
