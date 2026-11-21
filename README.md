@@ -282,11 +282,48 @@ Each of the five stages switches off with `0`.
 
 ---
 
+## Library
+
+The same file also builds as a library. `make lib` produces `libroue12.a` —
+`main12.c` compiled without its command line — and [`roue12.h`](roue12.h)
+declares five functions under the names and signatures of the `crible`
+library: a program written against `crible.h` links to roue12 without
+changing a line of source.
+
+| Function | Purpose |
+|:--|:--|
+| `crible_count_primes` | number of primes in `[start, stop]`, in parallel |
+| `crible_count_points` | counts at several increasing points in a single sieve, on the calling thread |
+| `crible_foreach_seg` | walks the primes in order, in batches, on the calling thread |
+| `crible_set_threads`, `crible_get_threads` | thread cap for `crible_count_primes` |
+
+```bash
+make lib                              # libroue12.a
+cc prog.c libroue12.a -fopenmp -lm    # linking
+```
+
+What differs from `crible`:
+
+- the upper bound is 10¹⁶; past it the functions return
+  `CRIBLE_EUNSUPPORTED` without computing anything;
+- `crible_foreach_seg` walks primes only, not k-tuplets, and treats
+  `segment_bytes` as a floor: roue12 picks its own segment;
+- the two calling-thread functions never spawn a thread, whatever segment is
+  requested.
+
+The base primes are kept from one call to the next and shared between
+threads — a single table, 23 MB at most. Every function is thread-safe except
+`crible_set_threads`.
+
+---
+
 ## Validation
 
 ```bash
-make check      # 127 checks, 0 failures
-make sanitize   # ASan + UBSan, both SINK_TAIL variants
+make check         # 127 checks, 0 failures
+make check-api     # the library: 17,122 checks, 0 failures
+make check-crible  # the same calls linked to crible, identical results
+make sanitize      # ASan + UBSan, both SINK_TAIL variants
 ```
 
 `make check` replays π(10ⁿ) against the known values, edge cases, high
@@ -294,8 +331,15 @@ intervals, 60 random intervals against an independent reference, consistency
 across fourteen stage configurations, and one regression test per fixed defect.
 The protocol is frozen in [`check.sh`](check.sh) and is rerunnable.
 
-The build is warning-free under `-Wall -Wextra`, including without `-fopenmp`
-and with `-DRECOMPUTE_TURN=1`.
+`make check-api` checks the five library functions against a naive sieve, the
+known values of π, and Miller-Rabin at high bounds, including simultaneous
+calls from several threads; the program is [`test_api.c`](test_api.c).
+`make check-crible` links that same program to a `libcrible.a` —
+`CRIBLE_LIB=path`, which this repository does not build — and requires
+identical results from both libraries.
+
+The build is warning-free under `-Wall -Wextra`, including without `-fopenmp`,
+with `-DRECOMPUTE_TURN=1`, and as a library (`-DROUE12_LIB`).
 
 ---
 

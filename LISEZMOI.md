@@ -292,11 +292,48 @@ Chacun des cinq étages s'éteint à `0`.
 
 ---
 
+## Bibliothèque
+
+Le même fichier donne aussi une bibliothèque. `make lib` construit
+`libroue12.a` — `main12.c` compilé sans sa ligne de commande — et
+[`roue12.h`](roue12.h) déclare cinq fonctions sous les noms et les signatures
+de la bibliothèque `crible` : un programme écrit contre `crible.h` se relie à
+roue12 sans changer une ligne de source.
+
+| Fonction | Rôle |
+|:--|:--|
+| `crible_count_primes` | nombre de premiers de `[début, fin]`, en parallèle |
+| `crible_count_points` | comptes à plusieurs points croissants en un seul crible, sur le thread appelant |
+| `crible_foreach_seg` | parcours des premiers dans l'ordre, par lots, sur le thread appelant |
+| `crible_set_threads`, `crible_get_threads` | plafond de threads de `crible_count_primes` |
+
+```bash
+make lib                              # libroue12.a
+cc prog.c libroue12.a -fopenmp -lm    # édition des liens
+```
+
+Ce qui diffère de `crible` :
+
+- la borne haute est 10¹⁶ ; au-delà les fonctions rendent
+  `CRIBLE_EUNSUPPORTED` sans rien calculer ;
+- `crible_foreach_seg` ne parcourt que les premiers, pas les k-uplets, et
+  prend `segment_bytes` pour un plancher : roue12 choisit son segment ;
+- les deux fonctions à thread appelant ne lancent jamais de thread, quel que
+  soit le segment demandé.
+
+Les premiers de base sont gardés d'un appel à l'autre et partagés entre les
+threads — une seule table, 23 Mo au plus. Toutes les fonctions sont sûres en
+contexte multi-thread, sauf `crible_set_threads`.
+
+---
+
 ## Validation
 
 ```bash
-make check      # 127 contrôles, 0 échec
-make sanitize   # ASan + UBSan, les deux variantes SINK_TAIL
+make check         # 127 contrôles, 0 échec
+make check-api     # la bibliothèque : 17 122 contrôles, 0 échec
+make check-crible  # les mêmes appels liés à crible, résultats identiques
+make sanitize      # ASan + UBSan, les deux variantes SINK_TAIL
 ```
 
 `make check` rejoue π(10ⁿ) contre les valeurs connues, les cas limites, les
@@ -304,8 +341,15 @@ intervalles hauts, 60 intervalles aléatoires contre une référence indépendan
 la cohérence sous quatorze configurations d'étages, et une régression par défaut
 corrigé. Le protocole est figé dans [`check.sh`](check.sh) et rejouable.
 
+`make check-api` confronte les cinq fonctions de la bibliothèque à un crible
+naïf, aux valeurs connues de π et à Miller-Rabin aux grandes bornes, appels
+simultanés depuis plusieurs threads compris ; le programme est
+[`test_api.c`](test_api.c). `make check-crible` relie ce même programme à une
+`libcrible.a` — `CRIBLE_LIB=chemin`, que ce dépôt ne construit pas — et exige
+des deux bibliothèques les mêmes résultats.
+
 La compilation est sans un seul avertissement sous `-Wall -Wextra`, y compris
-sans `-fopenmp` et avec `-DRECOMPUTE_TURN=1`.
+sans `-fopenmp`, avec `-DRECOMPUTE_TURN=1` et en bibliothèque (`-DROUE12_LIB`).
 
 ---
 
