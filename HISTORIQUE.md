@@ -9,6 +9,57 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-11-21 — `cf26487` · roue12 crible jusqu'à 2⁶⁴ − 1 · le brouillon porté après validation sur le 9700X
+
+Le brouillon de l'entrée ci-dessous a été validé sur le 9700X, et il est porté
+tel quel : `main12.c`, `roue12.h`, `test_api.c` et `check.sh` sont identiques
+octet pour octet à ceux de `scratchpad/`, qui disparaît du dépôt. C'est ce qui
+permet de ne rien rejouer de lourd sur le poste de la session — le code qui
+entre est celui qui a tourné là-bas, pas une réécriture.
+
+**Ce que cette entrée ne porte pas.** Ni la sortie de la validation sur le
+9700X, ni ses temps : elle a été rapportée, pas jointe. L'entrée précédente dit
+ce que `make check-haut` joue ; les chiffres de ce passage restent à consigner,
+avec leur commit, leur date et leur heure, par qui les a relevés.
+
+**Ce qui change pour qui s'en sert.**
+
+- La borne est 2⁶⁴ − 1, en ligne de commande comme dans la bibliothèque.
+  `CRIBLE_EUNSUPPORTED` ne sert plus qu'aux k-uplets et au réglage sans seaux.
+- Le message `Limit ... exceeds the maximum` disparaît : aucune valeur lue ne
+  peut plus dépasser la borne. Celui de `-d` reste, à la nouvelle borne. `BUG.md`
+  le note sous B3, dont la régression a changé en conséquence.
+- Au-delà de 4,6·10¹⁸ les seaux sont requis : `-K 0`, `-p` sous 7 et un `-J`
+  démesuré sont refusés avec un message, au lieu de compter faux.
+- Deux cibles : `make check-arith`, une seconde et aucun premier de base ;
+  `make check-haut`, 813 Mo de premiers gardés et de l'ordre de 1,6 Go le temps
+  de les construire. `make check` passe à 130 contrôles et `make check-api` à
+  17 150, sans dépasser 10¹⁸.
+
+**Vérifié sur le poste de la session**, le portable des trois entrées
+précédentes, donc sans pousser :
+
+```
+  fichiers portes                      identiques au brouillon, octet pour octet
+  compilation, gcc-16                  0 avertissement
+  make check-arith                     40 millions de controles, 0 echec
+  [1e18, +1e6]                         24280, comme crible
+  18446744073709551616                 refuse
+  18446744073709551615 -d 1            refuse, message exact
+```
+
+`make check` et `make check-api` n'y ont pas été rejoués à la racine : ils
+l'avaient été dans le brouillon, sur les mêmes fichiers.
+
+**Ce qui reste vrai de l'entrée précédente.** roue12 n'est pas taillé pour le
+sommet de la plage : chaque chunk y réactive les 203 millions de premiers, et
+l'anneau de seaux grossit avec le plus grand d'entre eux. La borne est levée
+pour l'exactitude ; la vitesse en haut de plage n'a pas été regardée.
+
+**Pour compte.** Lié à roue12, il n'est plus borné par x / y ≤ 10¹⁶ :
+`crible_count_points` monte aussi haut que celui de crible, et `compte -p`
+jusqu'à 2⁶⁴ − 1. Rien n'a été mesuré à ces hauteurs.
+
 ## 2026-11-21 — `222c93b` · La borne levée à 2⁶⁴ − 1, en brouillon · rien n'a tourné au sommet
 
 La borne de 10¹⁶ n'était pas structurelle : les premiers de criblage tiennent

@@ -130,6 +130,20 @@ lui-même.
 **Vérification.** Les deux messages ci-dessus, et les bornes acceptées restent
 inchangées : `1e16 -d 0` et `[10¹⁶−1, 10¹⁶]` passent toujours.
 
+**Depuis `cf26487` (2026-11-21).** La borne est 2⁶⁴ − 1. Le second message
+n'existe plus, aucune valeur lue ne pouvant dépasser la borne ; le premier
+reste, et la régression le vérifie à la nouvelle borne :
+
+```
+Interval end 18446744073709551615 + 1 exceeds the maximum 18446744073709551615
+```
+
+Le même commit ferme un défaut voisin avant qu'il ne puisse nuire :
+`18446744073709551616` était lu comme 2⁶⁴ − 1, `strtoull` saturant sans
+échouer. Tant que la borne valait 10¹⁶ la valeur était refusée quand même, avec
+un nombre faux dans le message ; à 2⁶⁴ − 1 elle aurait été acceptée. Elle est
+maintenant refusée à la lecture, et la régression le vérifie aussi.
+
 ---
 
 ## B4 — Débordement de `bucket_entry_t.at`
