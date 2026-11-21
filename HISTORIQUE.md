@@ -9,6 +9,59 @@ par date : symptôme, cause, correctif, vérification.
 
 ---
 
+## 2026-11-21 — `222c93b` · La borne levée à 2⁶⁴ − 1, en brouillon · rien n'a tourné au sommet
+
+La borne de 10¹⁶ n'était pas structurelle : les premiers de criblage tiennent
+dans 32 bits jusqu'à √(2⁶⁴). Quatre points la tenaient pourtant, et le brouillon
+`scratchpad/` — une copie de `main12.c`, `roue12.h`, `test_api.c`, `check.sh` et
+du Makefile — les lève. **Le code de la racine ne bouge pas**, parce que ce qui
+suit n'est pas validé là où il compte.
+
+- **Deux débordements à l'activation.** `(low + p - 1) / p` déborde à moins de
+  2³² du sommet, et `p * m / 30` dans les 5·10¹⁰ derniers entiers, le multiple
+  arrondi sur la roue 210 pouvant tomber jusqu'à 11 p au-delà de `low`. Le
+  second est le dangereux : la position repliée peut retomber dans le chunk et
+  rayer un bit à tort, sans erreur. Le plafond se prend par quotient et reste ;
+  l'octet du multiple par `7 p q + p R / 30`, exact puisque `210 p q` se divise
+  par 30, et sans jamais former le produit.
+- **Le curseur de 32 bits.** Avec les seaux, aucun premier à curseur ne dépasse
+  2,5 segments. Sans eux — `-K 0`, `-p` sous 7, un `-J` démesuré — tous en ont
+  un, et au-delà de 2³¹ il déborde. Le réglage est refusé dès que la borne passe
+  4,6·10¹⁸, plutôt que de compter faux.
+- **La lecture des bornes.** `18446744073709551616` était lu comme 2⁶⁴ − 1 :
+  `strtoull` sature sans échouer. Refusé.
+- **La largeur de `[0, 2⁶⁴ − 1]`**, qui vaut 2⁶⁴ et repliait à zéro.
+
+**Ce qui a pu être vérifié, et sur quoi.** Même poste que les deux entrées
+précédentes, un portable à étranglement thermique : rien de lourd n'y a tourné.
+
+```
+  make check-arith    40 millions de controles, 0 echec
+  test_api            17 150 controles, 0 echec
+  make check-crible   9 resumes identiques a crible
+  check.sh            130 reussites
+```
+
+`check-arith` est le contrôle propre à ce brouillon : les deux calculs corrigés
+confrontés à une référence sur 128 bits, dont 6,3 millions de cas où
+`low + p − 1` dépasse 2⁶⁴ et 7,0 millions où le multiple lui-même le dépasse. Il
+vérifie l'arithmétique sans cribler, donc sans premiers de base — et ne dit rien
+du crible à cette hauteur. Les trois autres montent jusqu'à 10¹⁸, sur des
+fenêtres étroites comptées par crible ou par Miller-Rabin.
+
+**Ce qui ne l'a pas été.** Tout ce qui dépasse 10¹⁸, le refus du réglage sans
+seaux, les sanitizers. Près de 2⁶⁴ il faut tous les premiers jusqu'à 2³², soit
+813 Mo gardés et de l'ordre de 1,6 Go le temps de les construire — estimation,
+non mesurée. `make check-haut`, dans `scratchpad/`, joue les valeurs connues à
+10¹⁸, 10¹⁹ et sous 2⁶⁴, et des fenêtres contre Miller-Rabin au sommet, autour de
+2⁶³ et de (2³¹)². C'est à lancer sur le 9700X avant de porter quoi que ce soit
+dans `main12.c`.
+
+**Ce que la borne levée ne promet pas.** roue12 n'est pas taillé pour le haut
+de la plage : chaque chunk y réactive les 203 millions de premiers, et l'anneau
+de seaux grossit avec le plus grand d'entre eux. Le brouillon vise l'exactitude,
+pas la vitesse.
+
 ## 2026-11-21 — `bbc78e8` · `make` construit tout, gcc-16 d'abord · et l'entrée précédente revérifiée après rebasage
 
 **Une seule commande.** `make` ne construisait que `roue12` ; la bibliothèque
