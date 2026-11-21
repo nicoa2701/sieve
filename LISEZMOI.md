@@ -10,7 +10,7 @@
 [![Parallèle](https://img.shields.io/badge/parall%C3%A8le-OpenMP-orange.svg)](#parallélisme)
 [![Dépendances](https://img.shields.io/badge/d%C3%A9pendances-aucune-success.svg)](#démarrage-rapide)
 
-*Compte les premiers jusqu'à une borne, ou dans un intervalle arbitraire, jusqu'à 10¹⁶.*
+*Compte les premiers jusqu'à une borne, ou dans un intervalle arbitraire, jusqu'à 2⁶⁴ − 1.*
 
 **Français** · [English](README.md)
 
@@ -46,7 +46,7 @@ la liste de recherche est elle-même surchargeable :
 ```bash
 ./roue12 1e13 -d 1e11   # compte dans [10¹³, 10¹³ + 10¹¹]
 ./roue12 1e12 -v        # montre le dimensionnement retenu
-make check              # 127 contrôles de validation
+make check              # 130 contrôles de validation
 make sanitize           # ASan + UBSan, les deux variantes SINK_TAIL
 ```
 
@@ -263,6 +263,11 @@ l'intervalle `[BAS, HAUT]`, bornes comprises. `-d DIST` reprend la convention de
 primesieve — `roue12 1e13 -d 1e11`. **Le coût suit la largeur de l'intervalle**,
 plus le pré-crible des premiers jusqu'à √HAUT.
 
+La borne est 2⁶⁴ − 1. roue12 n'est pas taillé pour le sommet de la plage :
+chaque chunk y réactive tous les premiers de base, 203 millions sous 2³². Et
+au-delà de 4,6·10¹⁸ les seaux sont requis — `-K 0`, `-p` sous 7 ou un `-J`
+démesuré sont refusés, un premier au-delà de 2³¹ débordant son curseur.
+
 <details>
 <summary><b>Toutes les options</b></summary>
 
@@ -314,25 +319,28 @@ cc prog.c libroue12.a -fopenmp -lm    # édition des liens
 
 Ce qui diffère de `crible` :
 
-- la borne haute est 10¹⁶ ; au-delà les fonctions rendent
-  `CRIBLE_EUNSUPPORTED` sans rien calculer ;
+- la borne haute est la même, 2⁶⁴ − 1, mais elle pèse : au sommet de la
+  plage il faut les 203 millions de premiers sous 2³², 813 Mo gardés ;
 - `crible_foreach_seg` ne parcourt que les premiers, pas les k-uplets, et
   prend `segment_bytes` pour un plancher : roue12 choisit son segment ;
 - les deux fonctions à thread appelant ne lancent jamais de thread, quel que
   soit le segment demandé.
 
 Les premiers de base sont gardés d'un appel à l'autre et partagés entre les
-threads — une seule table, 23 Mo au plus. Toutes les fonctions sont sûres en
-contexte multi-thread, sauf `crible_set_threads`.
+threads — une seule table, 23 Mo pour cribler jusqu'à 10¹⁶, 813 Mo jusqu'à
+2⁶⁴ − 1. Toutes les fonctions sont sûres en contexte multi-thread, sauf
+`crible_set_threads`.
 
 ---
 
 ## Validation
 
 ```bash
-make check         # 127 contrôles, 0 échec
-make check-api     # la bibliothèque : 17 122 contrôles, 0 échec
+make check         # 130 contrôles, 0 échec
+make check-api     # la bibliothèque : 17 150 contrôles, 0 échec
 make check-crible  # les mêmes appels liés à crible, résultats identiques
+make check-arith   # l'arithmétique du sommet de la plage, sur 128 bits
+make check-haut    # 10¹⁹ et le voisinage de 2⁶⁴ : 1,6 Go, plusieurs secondes
 make sanitize      # ASan + UBSan, les deux variantes SINK_TAIL
 ```
 
@@ -347,6 +355,16 @@ simultanés depuis plusieurs threads compris ; le programme est
 [`test_api.c`](test_api.c). `make check-crible` relie ce même programme à une
 `libcrible.a` — `CRIBLE_LIB=chemin`, que ce dépôt ne construit pas — et exige
 des deux bibliothèques les mêmes résultats.
+
+Le haut de la plage a ses deux contrôles. `make check-arith` confronte à une
+référence sur 128 bits les deux calculs de l'activation qui frôlent 2⁶⁴ — le
+plafond de `low / p` et l'octet du premier multiple — sans cribler, donc en
+une seconde sur n'importe quelle machine. `make check-haut` crible pour de
+bon : les valeurs connues à 10¹⁸, 10¹⁹ et sous 2⁶⁴, des fenêtres contre
+Miller-Rabin jusqu'au dernier entier, et le refus des réglages sans seaux.
+Il demande tous les premiers sous 2³², 813 Mo gardés et de l'ordre de 1,6 Go
+le temps de les construire : `make check` et `make check-api` s'arrêtent à
+10¹⁸ pour rester légers.
 
 La compilation est sans un seul avertissement sous `-Wall -Wextra`, y compris
 sans `-fopenmp`, avec `-DRECOMPUTE_TURN=1` et en bibliothèque (`-DROUE12_LIB`).

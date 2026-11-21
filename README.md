@@ -10,7 +10,7 @@
 [![Parallel](https://img.shields.io/badge/parallel-OpenMP-orange.svg)](#parallelism)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-success.svg)](#quick-start)
 
-*Counts the primes below a bound, or inside an arbitrary interval, up to 10¹⁶.*
+*Counts the primes below a bound, or inside an arbitrary interval, up to 2⁶⁴ − 1.*
 
 **English** · [Français](LISEZMOI.md)
 
@@ -44,7 +44,7 @@ search list is itself overridable: `make CC_PREFERRED="gcc-14 gcc-13"`.
 ```bash
 ./roue12 1e13 -d 1e11   # count inside [10¹³, 10¹³ + 10¹¹]
 ./roue12 1e12 -v        # show the sizing actually chosen
-make check              # 127 validation checks
+make check              # 130 validation checks
 make sanitize           # ASan + UBSan, both SINK_TAIL variants
 ```
 
@@ -253,6 +253,11 @@ One number counts the primes up to `HIGH`. Two numbers count the interval
 convention — `roue12 1e13 -d 1e11`. **Cost follows the width of the interval**,
 plus the pre-sieve of the primes up to √HIGH.
 
+The bound is 2⁶⁴ − 1. roue12 is not tuned for the top of the range: every
+chunk reactivates all the base primes there, 203 million below 2³². And past
+4.6·10¹⁸ the buckets are required — `-K 0`, `-p` below 7 or an oversized `-J`
+are refused, since a prime above 2³¹ would overflow its cursor.
+
 <details>
 <summary><b>All options</b></summary>
 
@@ -304,25 +309,27 @@ cc prog.c libroue12.a -fopenmp -lm    # linking
 
 What differs from `crible`:
 
-- the upper bound is 10¹⁶; past it the functions return
-  `CRIBLE_EUNSUPPORTED` without computing anything;
+- the upper bound is the same, 2⁶⁴ − 1, but it weighs: at the top of the
+  range the 203 million primes below 2³² are needed, 813 MB kept;
 - `crible_foreach_seg` walks primes only, not k-tuplets, and treats
   `segment_bytes` as a floor: roue12 picks its own segment;
 - the two calling-thread functions never spawn a thread, whatever segment is
   requested.
 
 The base primes are kept from one call to the next and shared between
-threads — a single table, 23 MB at most. Every function is thread-safe except
-`crible_set_threads`.
+threads — a single table, 23 MB to sieve up to 10¹⁶, 813 MB up to 2⁶⁴ − 1.
+Every function is thread-safe except `crible_set_threads`.
 
 ---
 
 ## Validation
 
 ```bash
-make check         # 127 checks, 0 failures
-make check-api     # the library: 17,122 checks, 0 failures
+make check         # 130 checks, 0 failures
+make check-api     # the library: 17,150 checks, 0 failures
 make check-crible  # the same calls linked to crible, identical results
+make check-arith   # the arithmetic of the top of the range, on 128 bits
+make check-haut    # 10¹⁹ and the neighbourhood of 2⁶⁴: 1.6 GB, several seconds
 make sanitize      # ASan + UBSan, both SINK_TAIL variants
 ```
 
@@ -337,6 +344,15 @@ calls from several threads; the program is [`test_api.c`](test_api.c).
 `make check-crible` links that same program to a `libcrible.a` —
 `CRIBLE_LIB=path`, which this repository does not build — and requires
 identical results from both libraries.
+
+The top of the range has two checks of its own. `make check-arith` compares
+against a 128-bit reference the two activation computations that brush 2⁶⁴ —
+the ceiling of `low / p` and the byte of the first multiple — without sieving,
+so in a second on any machine. `make check-haut` sieves for real: the known
+values at 10¹⁸, 10¹⁹ and below 2⁶⁴, windows against Miller-Rabin up to the last
+integer, and the refusal of bucket-less settings. It needs every prime below
+2³², 813 MB kept and about 1.6 GB while they are built: `make check` and
+`make check-api` stop at 10¹⁸ to stay light.
 
 The build is warning-free under `-Wall -Wextra`, including without `-fopenmp`,
 with `-DRECOMPUTE_TURN=1`, and as a library (`-DROUE12_LIB`).
